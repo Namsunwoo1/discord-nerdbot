@@ -6,11 +6,11 @@ from discord.ui import Button, View, Select
 import asyncio
 from datetime import datetime, timedelta
 
-# 🔒 .env 경로 명시적 지정 및 로드
+# .env 경로 명시적 지정 및 로드
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(dotenv_path)
 
-# ✅ 토큰 가져오기 및 유효성 검사
+# 토큰 가져오기 및 유효성 검사
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
@@ -89,7 +89,6 @@ class RoleSelectView(View):
         ]:
             self.add_item(RoleToggleButton(role_name, emoji))
 
-
 class PartyRoleSelect(Select):
     def __init__(self):
         options = [
@@ -105,7 +104,6 @@ class PartyRoleSelect(Select):
         ]
         super().__init__(placeholder="직업을 선택하세요! 참여 취소도 가능합니다.", min_values=1, max_values=1, options=options)
 
-
     async def callback(self, interaction: discord.Interaction):
         try:
             user = interaction.user
@@ -118,9 +116,7 @@ class PartyRoleSelect(Select):
                 else:
                     await interaction.response.send_message("아직 파티에 참여하지 않았습니다.", ephemeral=True)
             else:
-                if len(party_info["participants"]) >= 8 and user not in party_info["participants"]:
-                    await interaction.response.send_message("파티가 꽉 찼어요! 😢", ephemeral=True)
-                    return
+                # 8명 초과해도 예비 인원으로 등록 가능
                 party_info["participants"][user] = selected
                 await interaction.response.send_message(f"'{selected}' 역할로 파티에 참여했습니다!", ephemeral=True)
 
@@ -131,12 +127,23 @@ class PartyRoleSelect(Select):
                 "",
                 "**🧑‍🤝‍🧑 현재 참여자 명단:**",
             ]
-            if party_info["participants"]:
-                for member, role in party_info["participants"].items():
+
+            main_participants = list(party_info["participants"].items())[:8]
+            reserve_participants = list(party_info["participants"].items())[8:]
+
+            if main_participants:
+                for member, role in main_participants:
                     desc_lines.append(f"- {member.display_name}: {role}")
             else:
                 desc_lines.append("(아직 없음)")
-            desc_lines.append("\n👇 셀렉트 메뉴에서 역할을 선택하거나 참여 취소를 할 수 있습니다! 최대 8명까지.")
+
+            if reserve_participants:
+                desc_lines.append("\n**📄 예비 인원:**")
+                for member, role in reserve_participants:
+                    desc_lines.append(f"- {member.display_name}: {role}")
+
+            desc_lines.append("\n👇 셀렉트 메뉴에서 역할을 선택하거나 참여 취소를 할 수 있습니다! 최대 8명 + 예비 인원 허용.")
+
             new_description = "\n".join(desc_lines)
             new_embed = discord.Embed(title="🎯 파티 모집중!", description=new_description, color=0x00ff00)
 
@@ -195,7 +202,7 @@ async def 모집(ctx):
         f"⏰ 시간: **{time}**\n\n"
         "**🧑‍🤝‍🧑 현재 참여자 명단:**\n(아직 없음)\n\n"
         "🔔 참여자에게 시작 30분 전에 알림이 전송됩니다!\n"
-        "👇 아래 셀렉트 메뉴에서 역할을 선택해 파티에 참여하세요! 최대 8명까지."
+        "👇 아래 셀렉트 메뉴에서 역할을 선택해 파티에 참여하세요! 최대 8명 + 예비 인원 허용."
     )
     embed = discord.Embed(title="🎯 파티 모집중!", description=initial_description, color=0x00ff00)
     embed_msg = await thread.send(embed=embed)
@@ -222,7 +229,7 @@ async def reminder_loop():
                 except Exception as e:
                     print(f"리마인더 전송 실패: {e}")
             party_info["reminder_time"] = None
-        await asyncio.sleep(600)
+        await asyncio.sleep(600)  # 10분마다 체크
 
 @bot.event
 async def on_ready():
@@ -272,7 +279,6 @@ async def on_ready():
         
         if party_embed_msg is None:
             print("파티 모집 메시지가 없어 새로 생성해야 합니다.")
-            # 파티 모집 정보가 없으면 스킵
             if party_info["dungeon"] and party_info["date"] and party_info["time"]:
                 initial_description = (
                     f"📍 던전: **{party_info['dungeon']}**\n"
@@ -280,7 +286,7 @@ async def on_ready():
                     f"⏰ 시간: **{party_info['time']}**\n\n"
                     "**🧑‍🤝‍🧑 현재 참여자 명단:**\n(아직 없음)\n\n"
                     "🔔 참여자에게 시작 30분 전에 알림이 전송됩니다!\n"
-                    "👇 아래 셀렉트 메뉴에서 역할을 선택해 파티에 참여하세요! 최대 8명까지."
+                    "👇 아래 셀렉트 메뉴에서 역할을 선택해 파티에 참여하세요! 최대 8명 + 예비 인원 허용."
                 )
                 embed = discord.Embed(title="🎯 파티 모집중!", description=initial_description, color=0x00ff00)
                 embed_msg = await party_channel.send(embed=embed)
@@ -321,5 +327,64 @@ async def on_member_remove(member):
     log_channel = discord.utils.get(member.guild.text_channels, name="🚪│입출입-로그")
     if log_channel:
         await log_channel.send(f"🔴 {member.display_name} 님이 서버를 퇴장했습니다.")
+
+@bot.command()
+async def 수정(ctx):
+    if not party_info["thread"] or ctx.channel != party_info["thread"]:
+        return await ctx.send("⚠️ 이 명령어는 파티 모집 스레드 안에서만 사용 가능해요.")
+
+    await ctx.send("✏️ 수정할 정보를 입력해주세요 (예: `수정 던전명 날짜 시간`)\n예시: `수정 브리레흐2관 7/5 21:00`")
+
+    def check(m): 
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    try:
+        msg = await bot.wait_for("message", timeout=30.0, check=check)
+        parts = msg.content.strip().split()
+        if len(parts) != 4 or parts[0] != "수정":
+            return await ctx.send("⚠️ 형식이 잘못되었습니다. 예: `수정 브리레흐2관 7/5 21:00`")
+
+        _, dungeon, date, time = parts
+        party_info["dungeon"] = dungeon
+        party_info["date"] = date
+        party_info["time"] = time
+
+        dt_str = f"2025-{date} {time}"
+        party_time = datetime.strptime(dt_str, "%Y-%m/%d %H:%M")
+        party_info["reminder_time"] = party_time - timedelta(minutes=30)
+
+        await ctx.send("\u2705 파티 정보가 수정되었습니다!")
+
+        # embed 갱신
+        desc_lines = [
+            f"📍 던전: **{dungeon}**",
+            f"📅 날짜: **{date}**",
+            f"⏰ 시간: **{time}**",
+            "",
+            "**🧑‍🤝‍🧑 현재 참여자 명단:**",
+        ]
+
+        main_participants = list(party_info["participants"].items())[:8]
+        reserve_participants = list(party_info["participants"].items())[8:]
+
+        if main_participants:
+            for member, role in main_participants:
+                desc_lines.append(f"- {member.display_name}: {role}")
+        else:
+            desc_lines.append("(아직 없음)")
+
+        if reserve_participants:
+            desc_lines.append("\n**📄 예비 인원:**")
+            for member, role in reserve_participants:
+                desc_lines.append(f"- {member.display_name}: {role}")
+
+        desc_lines.append("\n👇 셀렉트 메뉴에서 역할을 선택하거나 참여 취소를 해주세요! 최대 8명 + 예비 인원 허용.")
+
+        embed = discord.Embed(title="🎯 파티 모집중!", description="\n".join(desc_lines), color=0x00ff00)
+        if party_info["embed_msg"]:
+            await party_info["embed_msg"].edit(embed=embed)
+
+    except asyncio.TimeoutError:
+        await ctx.send("시간 초과! 다시 시도해주세요.")
 
 bot.run(TOKEN)
