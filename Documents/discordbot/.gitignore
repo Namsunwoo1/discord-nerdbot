@@ -1,0 +1,21 @@
+# 환경 변수 파일
+.env
+
+# 파이썬 캐시 폴더 및 파일
+__pycache__/
+*.py[cod]
+
+# 가상환경 폴더 (가상환경 이름에 따라 다를 수 있음)
+venv/
+env/
+
+# 로그 파일
+*.log
+
+# IDE 설정 파일들 (VSCode, PyCharm 등)
+.vscode/
+.idea/
+
+# 윈도우 시스템 폴더 무시
+AppData/
+Local/
