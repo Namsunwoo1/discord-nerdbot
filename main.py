@@ -25,6 +25,9 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 서버 ID (본인 서버 ID로 변경하세요)
+YOUR_GUILD_ID = 1388092210519605361  # 여기에 서버 아이디 넣기!
+
 # 채널 및 역할 ID 설정 (본인의 서버에 맞게 수정하세요)
 ROLE_SELECT_CHANNEL_ID = 1388211020576587786
 PARTY_RECRUIT_CHANNEL_ID = 1388112858365300836
@@ -325,19 +328,33 @@ async def 인증메시지(ctx):
 async def on_ready():
     print(f"✅ 봇 로그인 완료: {bot.user}")
 
-    # 역할 선택 뷰 복구 또는 새 메시지 생성
+    # 서버에서 닉네임 변경 (필요하면 활성화)
+    guild = bot.get_guild(YOUR_GUILD_ID)
+    if guild:
+        me = guild.me
+        try:
+            await me.edit(nick="찡긋봇")
+            print(f"봇 닉네임을 '찡긋봇'으로 변경했습니다.")
+        except Exception as e:
+            print(f"봇 닉네임 변경 실패: {e}")
+    else:
+        print("서버를 찾을 수 없습니다. YOUR_GUILD_ID를 확인하세요.")
+
+    # 역할 선택 메시지 뷰 복구 또는 새 메시지 생성
     role_channel = bot.get_channel(ROLE_SELECT_CHANNEL_ID)
     if role_channel:
-        async for msg in role_channel.history(limit=100):
-            if msg.author == bot.user and "아래 버튼을 눌러" in msg.content:
-                try:
+        try:
+            async for msg in role_channel.history(limit=100):
+                if msg.author == bot.user and "아래 버튼을 눌러" in msg.content:
                     await msg.edit(view=RoleSelectView())
                     print("역할 선택 메시지 뷰 재적용 완료")
-                except Exception as e:
-                    print(f"역할 선택 메시지 뷰 재적용 실패: {e}")
-                break
-        else:
-            await role_channel.send("🎭 아래 버튼을 눌러 원하는 역할을 추가하거나 제거하세요!", view=RoleSelectView())
+                    break
+            else:
+                await role_channel.send("🎭 아래 버튼을 눌러 원하는 역할을 추가하거나 제거하세요!", view=RoleSelectView())
+        except discord.errors.Forbidden:
+            print(f"{role_channel.name} 채널 권한이 부족합니다. 봇 권한을 확인해주세요.")
+        except Exception as e:
+            print(f"역할 선택 메시지 뷰 재적용 실패: {e}")
 
     bot.loop.create_task(reminder_loop())
 
@@ -350,8 +367,11 @@ async def on_member_join(member):
     # 찡긋 역할 자동 부여 (필요하면 주석 처리 가능)
     role = member.guild.get_role(AUTH_ROLE_ID)
     if role:
-        await member.add_roles(role)
-        print(f"{member.display_name}님에게 자동으로 '찡긋' 역할이 부여되었습니다.")
+        try:
+            await member.add_roles(role)
+            print(f"{member.display_name}님에게 자동으로 '찡긋' 역할이 부여되었습니다.")
+        except Exception as e:
+            print(f"자동 역할 부여 실패: {e}")
 
     if welcome_channel:
         await welcome_channel.send(
@@ -382,13 +402,11 @@ async def reminder_loop():
                 try:
                     await party_info["thread"].send(
                         f"⏰ **리마인더 알림!**\n{mentions}\n"
-                        f"`{party_info['dungeon']}` 던전이 30분 후에 시작됩니다! ({party_info['date']} {party_info['time']})"
+                        f"`{party_info['dungeon']}` 던전이 30분 후에 시작됩니다!"
                     )
+                    party_info["reminder_time"] = None  # 알림 후 초기화
                 except Exception as e:
                     print(f"리마인더 전송 실패: {e}")
-            party_info["reminder_time"] = None
-        await asyncio.sleep(600)  # 10분마다 체크
-
-# --- 봇 실행 ---
+        await asyncio.sleep(60)  # 1분마다 체크
 
 bot.run(TOKEN)
