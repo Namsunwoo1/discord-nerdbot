@@ -1,4 +1,5 @@
 import os
+import json
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands
@@ -22,14 +23,8 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 서버 ID
 YOUR_GUILD_ID = 1388092210519605361
-
-# 채널/역할 ID
 ROLE_SELECT_CHANNEL_ID = 1388211020576587786
-PARTY_RECRUIT_CHANNEL_ID = 1388112858365300836
-WELCOME_CHANNEL_ID = 1390643886656847983
-AUTH_ROLE_ID = 1390356825454416094
 
 ROLE_IDS = {
     "세이크리드 가드": 1388109175703470241,
@@ -42,7 +37,49 @@ ROLE_IDS = {
     "배리어블 거너": 1389897731463581736,
 }
 
-party_infos = {}
+DATA_FILE = "data.json"
+
+# 메모리 상태 초기화
+state = {
+    "role_message_id": None,
+    "party_infos": {}
+}
+
+def save_state():
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=4)
+
+def load_state():
+    global state
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            try:
+                loaded = json.load(f)
+                # 키가 없으면 기본값으로 처리
+                state = {
+                    "role_message_id": loaded.get("role_message_id"),
+                    "party_infos": loaded.get("party_infos", {})
+                }
+            except Exception as e:
+                print(f"state 로드 실패: {e}")
+
+# party_infos 메모리에 맞게 변환 (JSON은 member 객체 못 저장하므로 유저 ID와 이름 저장 후 다시 객체 찾아야함)
+async def restore_party_infos(guild):
+    for thread_id_str, info in list(state["party_infos"].items()):
+        thread_id = int(thread_id_str)
+        participants_raw = info.get("participants", {})
+        participants = {}
+        for user_id_str, role in participants_raw.items():
+            user_id = int(user_id_str)
+            member = guild.get_member(user_id)
+            if member:
+                participants[member] = role
+        info["participants"] = participants
+        # owner도 유저 객체로 변환
+        owner_id = info.get("owner_id")
+        owner = guild.get_member(owner_id) if owner_id else None
+        info["owner"] = owner
+        state["party_infos"][thread_id_str] = info
 
 class RoleToggleButton(Button):
     def __init__(self, role_name, emoji):
@@ -81,20 +118,23 @@ class PartyRoleSelect(Select):
 
     async def callback(self, interaction: discord.Interaction):
         thread_id = interaction.channel.id
-        if thread_id not in party_infos:
+        info = state["party_infos"].get(str(thread_id))
+        if not info:
             return await interaction.response.send_message("⚠️ 파티 정보를 찾을 수 없습니다.", ephemeral=True)
 
-        info = party_infos[thread_id]
         user = interaction.user
         selected = self.values[0]
 
         if selected == "참여 취소":
-            info["participants"].pop(user, None)
+            # 참가자 제거
+            info["participants"].pop(str(user.id), None)
             await interaction.response.send_message("파티 참여가 취소되었습니다.", ephemeral=True)
         else:
-            info["participants"][user] = selected
+            info["participants"][str(user.id)] = selected
             await interaction.response.send_message(f"'{selected}' 역할로 파티에 참여했습니다!", ephemeral=True)
 
+        # 저장 후 업데이트
+        save_state()
         await update_party_embed(thread_id)
 
 class PartyEditButton(Button):
@@ -103,11 +143,12 @@ class PartyEditButton(Button):
 
     async def callback(self, interaction: discord.Interaction):
         thread_id = interaction.channel.id
-        if thread_id not in party_infos:
+        info = state["party_infos"].get(str(thread_id))
+        if not info:
             return await interaction.response.send_message("⚠️ 파티 정보를 찾을 수 없습니다.", ephemeral=True)
 
-        info = party_infos[thread_id]
-        if interaction.user != info.get("owner"):
+        owner_id = info.get("owner_id")
+        if interaction.user.id != owner_id:
             return await interaction.response.send_message("⛔ 당신은 이 파티의 모집자가 아닙니다.", ephemeral=True)
 
         await interaction.response.send_message(
@@ -131,9 +172,10 @@ class PartyEditButton(Button):
                 "dungeon": dungeon,
                 "date": date,
                 "time": time,
-                "reminder_time": reminder_time,
+                "reminder_time": reminder_time.timestamp(),
             })
 
+            save_state()
             await update_party_embed(thread_id)
             await interaction.followup.send("✅ 파티 정보가 성공적으로 수정되었습니다!", ephemeral=True)
 
@@ -149,7 +191,10 @@ class PartyView(View):
         self.add_item(PartyEditButton())
 
 async def update_party_embed(thread_id):
-    info = party_infos[thread_id]
+    info = state["party_infos"].get(str(thread_id))
+    if not info:
+        return
+
     desc_lines = [
         f"📍 던전: **{info['dungeon']}**",
         f"📅 날짜: **{info['date']}**",
@@ -158,8 +203,19 @@ async def update_party_embed(thread_id):
         "**🧑‍🤝‍🧑 현재 참여자 명단:**",
     ]
 
-    main = list(info["participants"].items())[:8]
-    reserve = list(info["participants"].items())[8:]
+    guild = bot.get_guild(YOUR_GUILD_ID)
+    participants = info.get("participants", {})
+    # 멤버 객체 복원
+    main = []
+    reserve = []
+    for idx, (user_id_str, role) in enumerate(participants.items()):
+        member = guild.get_member(int(user_id_str))
+        if not member:
+            continue
+        if idx < 8:
+            main.append((member, role))
+        else:
+            reserve.append((member, role))
 
     if main:
         for member, role in main:
@@ -173,7 +229,15 @@ async def update_party_embed(thread_id):
             desc_lines.append(f"- {member.display_name}: {role}")
 
     embed = discord.Embed(title="🎯 파티 모집중!", description="\n".join(desc_lines), color=0x00ff00)
-    await info["embed_msg"].edit(embed=embed)
+
+    embed_msg_id = info.get("embed_msg_id")
+    channel = bot.get_channel(int(thread_id))
+    if channel and embed_msg_id:
+        try:
+            msg = await channel.fetch_message(embed_msg_id)
+            await msg.edit(embed=embed)
+        except Exception as e:
+            print(f"임베드 수정 실패: {e}")
 
 @bot.command()
 async def 모집(ctx):
@@ -194,15 +258,18 @@ async def 모집(ctx):
         auto_archive_duration=60,
     )
 
-    party_infos[thread.id] = {
+    party_info = {
         "dungeon": dungeon,
         "date": date,
         "time": time,
-        "reminder_time": reminder_time,
+        "reminder_time": reminder_time.timestamp(),
         "participants": {},
-        "embed_msg": None,
-        "owner": ctx.author,
+        "embed_msg_id": None,
+        "owner_id": ctx.author.id,
     }
+
+    state["party_infos"][str(thread.id)] = party_info
+    save_state()
 
     initial = (
         f"📍 던전: **{dungeon}**\n📅 날짜: **{date}**\n⏰ 시간: **{time}**\n\n"
@@ -213,31 +280,41 @@ async def 모집(ctx):
     embed = discord.Embed(title="🎯 파티 모집중!", description=initial, color=0x00ff00)
     embed_msg = await thread.send(embed=embed)
     await embed_msg.pin()
-    party_infos[thread.id]["embed_msg"] = embed_msg
+    party_info["embed_msg_id"] = embed_msg.id
+    save_state()
 
     await thread.send(view=PartyView())
     await ctx.send(f"{ctx.author.mention}님, 파티 모집 스레드가 생성되었습니다: {thread.mention}")
 
 async def reminder_loop():
     await bot.wait_until_ready()
+    guild = bot.get_guild(YOUR_GUILD_ID)
+    await restore_party_infos(guild)
+
     while not bot.is_closed():
-        now = datetime.now()
-        for thread_id, info in list(party_infos.items()):
+        now = datetime.now().timestamp()
+        for thread_id_str, info in list(state["party_infos"].items()):
             reminder_time = info.get("reminder_time")
             if reminder_time and now >= reminder_time:
                 participants = info.get("participants", {})
                 if participants:
-                    mentions = " ".join(m.mention for m in participants)
-                    thread = bot.get_channel(thread_id)
+                    guild = bot.get_guild(YOUR_GUILD_ID)
+                    mentions = []
+                    for user_id_str in participants.keys():
+                        member = guild.get_member(int(user_id_str))
+                        if member:
+                            mentions.append(member.mention)
+                    thread = bot.get_channel(int(thread_id_str))
                     if thread:
                         try:
                             await thread.send(
-                                f"⏰ **리마인더 알림!**\n{mentions}\n"
+                                f"⏰ **리마인더 알림!**\n{' '.join(mentions)}\n"
                                 f"`{info['dungeon']}` 던전이 30분 후에 시작됩니다!"
                             )
                             info["reminder_time"] = None
+                            save_state()
                         except Exception as e:
-                            print(f"리마인더 전송 실패 (스레드 {thread_id}): {e}")
+                            print(f"리마인더 전송 실패 (스레드 {thread_id_str}): {e}")
         await asyncio.sleep(60)
 
 @bot.event
@@ -249,6 +326,23 @@ async def on_ready():
             await guild.me.edit(nick="찡긋봇")
         except Exception as e:
             print(f"닉네임 변경 실패: {e}")
+
+        # 역할 선택 메시지 관리
+        channel = guild.get_channel(ROLE_SELECT_CHANNEL_ID)
+        if channel:
+            try:
+                if state["role_message_id"]:
+                    msg = await channel.fetch_message(state["role_message_id"])
+                else:
+                    msg = await channel.send("👇 역할을 선택해주세요!", view=RoleSelectView())
+                    state["role_message_id"] = msg.id
+                    save_state()
+            except Exception as e:
+                print(f"역할 선택 메시지 처리 오류: {e}")
+
     bot.loop.create_task(reminder_loop())
+
+# 시작 시 상태 로드
+load_state()
 
 bot.run(TOKEN)
