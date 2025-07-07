@@ -42,7 +42,6 @@ ROLE_IDS = {
     "배리어블 거너": 1389897731463581736,
 }
 
-# 파티 정보를 스레드별로 저장
 party_infos = {}
 
 class RoleToggleButton(Button):
@@ -64,12 +63,12 @@ class RoleToggleButton(Button):
 class RoleSelectView(View):
     def __init__(self):
         super().__init__(timeout=None)
-        for role_name, emoji in ROLE_IDS.items():
-            emoji_map = {
-                "세이크리드 가드": "🛡️", "다크 메이지": "🔮", "세인트 바드": "🎵",
-                "블래스트 랜서": "⚔️", "엘레멘탈 나이트": "🗡️", "알케믹 스팅어": "🧪",
-                "포비든 알케미스트": "☠️", "배리어블 거너": "🔫"
-            }
+        emoji_map = {
+            "세이크리드 가드": "🛡️", "다크 메이지": "🔮", "세인트 바드": "🎵",
+            "블래스트 랜서": "⚔️", "엘레멘탈 나이트": "🗡️", "알케믹 스팅어": "🧪",
+            "포비든 알케미스트": "☠️", "배리어블 거너": "🔫"
+        }
+        for role_name in ROLE_IDS:
             self.add_item(RoleToggleButton(role_name, emoji_map[role_name]))
 
 class PartyRoleSelect(Select):
@@ -77,9 +76,7 @@ class PartyRoleSelect(Select):
         options = [
             discord.SelectOption(label=role, emoji=emoji)
             for role, emoji in zip(ROLE_IDS.keys(), ["🛡️", "🔮", "🎵", "⚔️", "🗡️", "🧪", "☠️", "🔫"])
-        ] + [
-            discord.SelectOption(label="참여 취소", emoji="❌")
-        ]
+        ] + [discord.SelectOption(label="참여 취소", emoji="❌")]
         super().__init__(placeholder="직업을 선택하거나 참여 취소하세요!", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -98,35 +95,85 @@ class PartyRoleSelect(Select):
             info["participants"][user] = selected
             await interaction.response.send_message(f"'{selected}' 역할로 파티에 참여했습니다!", ephemeral=True)
 
-        desc_lines = [
-            f"📍 던전: **{info['dungeon']}**",
-            f"📅 날짜: **{info['date']}**",
-            f"⏰ 시간: **{info['time']}**",
-            "",
-            "**🧑‍🤝‍🧑 현재 참여자 명단:**",
-        ]
+        await update_party_embed(thread_id)
 
-        main = list(info["participants"].items())[:8]
-        reserve = list(info["participants"].items())[8:]
+class PartyEditButton(Button):
+    def __init__(self):
+        super().__init__(label="✏️ 파티 정보 수정", style=discord.ButtonStyle.primary)
 
-        if main:
-            for member, role in main:
-                desc_lines.append(f"- {member.display_name}: {role}")
-        else:
-            desc_lines.append("(아직 없음)")
+    async def callback(self, interaction: discord.Interaction):
+        thread_id = interaction.channel.id
+        if thread_id not in party_infos:
+            return await interaction.response.send_message("⚠️ 파티 정보를 찾을 수 없습니다.", ephemeral=True)
 
-        if reserve:
-            desc_lines.append("\n**📄 예비 인원:**")
-            for member, role in reserve:
-                desc_lines.append(f"- {member.display_name}: {role}")
+        info = party_infos[thread_id]
+        if interaction.user != info.get("owner"):
+            return await interaction.response.send_message("⛔ 당신은 이 파티의 모집자가 아닙니다.", ephemeral=True)
 
-        embed = discord.Embed(title="🎯 파티 모집중!", description="\n".join(desc_lines), color=0x00ff00)
-        await info["embed_msg"].edit(embed=embed)
+        await interaction.response.send_message(
+            "새로운 파티 정보를 입력해주세요. 예: `던전명 날짜 시간` (예: 브리레흐1-3관 7/10 20:30)",
+            ephemeral=True
+        )
+
+        def check(m):
+            return m.author == interaction.user and m.channel == interaction.channel
+
+        try:
+            msg = await bot.wait_for("message", timeout=60.0, check=check)
+            dungeon, date, time = msg.content.strip().split()
+
+            year = datetime.now().year
+            dt_str = f"{year}-{date} {time}"
+            party_time = datetime.strptime(dt_str, "%Y-%m/%d %H:%M")
+            reminder_time = party_time - timedelta(minutes=30)
+
+            info.update({
+                "dungeon": dungeon,
+                "date": date,
+                "time": time,
+                "reminder_time": reminder_time,
+            })
+
+            await update_party_embed(thread_id)
+            await interaction.followup.send("✅ 파티 정보가 성공적으로 수정되었습니다!", ephemeral=True)
+
+        except asyncio.TimeoutError:
+            await interaction.followup.send("⏰ 시간 초과로 수정이 취소되었습니다.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"⚠️ 오류 발생: {e}", ephemeral=True)
 
 class PartyView(View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(PartyRoleSelect())
+        self.add_item(PartyEditButton())
+
+async def update_party_embed(thread_id):
+    info = party_infos[thread_id]
+    desc_lines = [
+        f"📍 던전: **{info['dungeon']}**",
+        f"📅 날짜: **{info['date']}**",
+        f"⏰ 시간: **{info['time']}**",
+        "",
+        "**🧑‍🤝‍🧑 현재 참여자 명단:**",
+    ]
+
+    main = list(info["participants"].items())[:8]
+    reserve = list(info["participants"].items())[8:]
+
+    if main:
+        for member, role in main:
+            desc_lines.append(f"- {member.display_name}: {role}")
+    else:
+        desc_lines.append("(아직 없음)")
+
+    if reserve:
+        desc_lines.append("\n**📄 예비 인원:**")
+        for member, role in reserve:
+            desc_lines.append(f"- {member.display_name}: {role}")
+
+    embed = discord.Embed(title="🎯 파티 모집중!", description="\n".join(desc_lines), color=0x00ff00)
+    await info["embed_msg"].edit(embed=embed)
 
 @bot.command()
 async def 모집(ctx):
@@ -154,6 +201,7 @@ async def 모집(ctx):
         "reminder_time": reminder_time,
         "participants": {},
         "embed_msg": None,
+        "owner": ctx.author,
     }
 
     initial = (
