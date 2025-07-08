@@ -87,7 +87,7 @@ def load_state():
 
 # === 인텐트 및 봇 초기화 ===
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None) # <--- 이 부분에 help_command=None 추가
 
 # === 역할 선택 UI 개선: 아르카나/MBTI 탭 ===
 
@@ -284,7 +284,7 @@ class PartyEditButton(Button):
         except asyncio.TimeoutError:
             await interaction.followup.send("⏰ 시간 초과로 수정이 취소되었습니다.", ephemeral=True)
         except ValueError as e: 
-            await interaction.followup.send(f"⚠️ {e}", ephemeral=True) # ephemeral=True 추가
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True) 
         except Exception as e:
             await interaction.followup.send(f"⚠️ 오류 발생: {e}", ephemeral=True)
 
@@ -505,7 +505,6 @@ async def mbti확인(ctx, mbti_type: str):
 
 # ---
 ## 명령어 도움말 기능
-
 @bot.command(name="도움말", aliases=["help", "명령어"])
 async def show_help(ctx):
     """봇의 사용 가능한 명령어 목록을 보여줍니다."""
