@@ -315,11 +315,6 @@ async def update_party_embed(thread_id):
             await msg.edit(embed=embed)
         except Exception as e:
             print(f"임베드 수정 실패: {e}")
-
-# ---
-## MBTI 통계 기능
----
-
 @bot.command()
 async def mbti통계(ctx):
     """서버 내 MBTI 역할 통계를 보여줍니다."""
