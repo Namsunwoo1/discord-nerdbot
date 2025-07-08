@@ -25,7 +25,6 @@ VERIFIED_ROLE_ID = 1390356825454416094       # 인증 완료 역할
 VERIFY_LOG_CHANNEL_ID = 1391756822763012190    # 인증 로그 채널
 
 # 역할 ID 목록 (직업 역할 + MBTI 역할)
-# ROLE_IDS를 직업과 MBTI로 분리하여 관리 (더 명확해짐)
 ROLE_IDS = {
     "JOB": {
         "세이크리드 가드": 1388109175703470241,
@@ -105,8 +104,6 @@ EMOJI_MAP = {
 
 class RoleSelectButton(Button):
     def __init__(self, role_name, emoji, role_type):
-        # custom_id를 role_type과 role_name을 조합하여 고유하게 만듭니다.
-        # 지속성 뷰를 위해 모든 버튼에 고유한 custom_id 필수
         super().__init__(
             label=role_name, 
             style=discord.ButtonStyle.secondary, 
@@ -136,7 +133,7 @@ class RoleSelectButton(Button):
                 for existing_role in interaction.user.roles:
                     if existing_role.name in MBTI_ROLE_NAMES:
                         await interaction.user.remove_roles(existing_role)
-                        break # MBTI 역할은 하나만 제거하면 됨
+                        break 
             
             await interaction.user.add_roles(role)
             await interaction.response.send_message(f"'{self.role_name}' 역할이 추가되었습니다.", ephemeral=True)
@@ -145,52 +142,50 @@ class RoleSelectButton(Button):
 class CategorySelectView(View):
     """아르카나/MBTI 카테고리를 선택하는 초기 뷰"""
     def __init__(self):
-        super().__init__(timeout=None) # 봇 재시작 시에도 유지되도록 timeout=None
+        super().__init__(timeout=None) 
 
     @discord.ui.button(label="아르카나 선택", style=discord.ButtonStyle.primary, custom_id="job_select_button", emoji="💫")
     async def job_select_button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(
             content="👇 원하는 **아르카나 역할**을 선택하거나, `MBTI 선택` 버튼을 눌러주세요.",
-            view=RoleButtonsView("JOB") # JOB 카테고리의 역할을 표시
+            view=RoleButtonsView("JOB") 
         )
 
     @discord.ui.button(label="MBTI 선택", style=discord.ButtonStyle.success, custom_id="mbti_select_button", emoji="🎭")
     async def mbti_select_button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(
             content="👇 원하는 **MBTI 역할**을 선택하거나, `아르카나 선택` 버튼을 눌러주세요.",
-            view=RoleButtonsView("MBTI") # MBTI 카테고리의 역할을 표시
+            view=RoleButtonsView("MBTI") 
         )
 
 class RoleButtonsView(View):
     """선택된 카테고리(아르카나 또는 MBTI)에 해당하는 역할 버튼들을 보여주는 뷰"""
     def __init__(self, role_category: str):
-        super().__init__(timeout=None) # 이 뷰도 지속성 뷰로 사용될 수 있도록 timeout=None
+        super().__init__(timeout=None)
         self.role_category = role_category
         
         roles_to_display = ROLE_IDS[self.role_category]
 
-        # 버튼 추가
-        for role_name in roles_to_display.keys(): # ROLE_IDS에서 직접 role_name 가져옴
+        for role_name in roles_to_display.keys():
             self.add_item(RoleSelectButton(role_name, EMOJI_MAP.get(role_name, "❓"), self.role_category))
         
-        # '뒤로가기' 버튼 추가
         self.add_item(BackToCategoryButton())
 
 class BackToCategoryButton(Button):
     """카테고리 선택 뷰로 돌아가는 버튼"""
     def __init__(self):
-        super().__init__(label="🔙 뒤로가기", style=discord.ButtonStyle.danger, row=4, custom_id="back_to_category_button") # custom_id 추가
+        super().__init__(label="🔙 뒤로가기", style=discord.ButtonStyle.danger, row=4, custom_id="back_to_category_button") 
     
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.edit_message(
             content="👇 아래 버튼을 눌러 `아르카나` 또는 `MBTI` 역할을 선택하세요!",
-            view=CategorySelectView() # 초기 카테고리 선택 뷰로 돌아감
+            view=CategorySelectView() 
         )
 
 # === 인증 버튼 ===
 class VerifyButton(Button):
     def __init__(self, label="✅ 인증하죠", style=discord.ButtonStyle.success, emoji="🪪"):
-        super().__init__(label=label, style=style, emoji=emoji, custom_id="verify_button") # custom_id 추가
+        super().__init__(label=label, style=style, emoji=emoji, custom_id="verify_button") 
 
     async def callback(self, interaction: discord.Interaction):
         role = interaction.guild.get_role(VERIFIED_ROLE_ID)
@@ -211,12 +206,10 @@ class VerifyView(View):
 # === 파티 모집 ===
 class PartyRoleSelect(Select):
     def __init__(self):
-        # 직업(아르카나) 역할만 셀렉트 메뉴에 포함
         options = [
             discord.SelectOption(label=role, emoji=EMOJI_MAP.get(role, "❓"))
-            for role in ROLE_IDS["JOB"].keys() # JOB 카테고리 사용
+            for role in ROLE_IDS["JOB"].keys() 
         ] + [discord.SelectOption(label="참여 취소", emoji="❌")]
-        # custom_id를 Select에도 추가 (필수)
         super().__init__(placeholder="아르카나를 선택하거나 참여 취소하세요!", min_values=1, max_values=1, options=options, custom_id="party_role_select")
 
     async def callback(self, interaction: discord.Interaction):
@@ -240,7 +233,7 @@ class PartyRoleSelect(Select):
 
 class PartyEditButton(Button):
     def __init__(self, label="✏️ 파티 정보 수정", style=discord.ButtonStyle.primary):
-        super().__init__(label=label, style=style, custom_id="party_edit_button") # custom_id 추가
+        super().__init__(label=label, style=style, custom_id="party_edit_button") 
 
     async def callback(self, interaction: discord.Interaction):
         thread_id = interaction.channel.id
@@ -268,9 +261,19 @@ class PartyEditButton(Button):
             time = content_parts[2]
 
             year = datetime.now().year
-            # 'M/D' 또는 'MM/DD' 형식을 모두 지원하도록 변경
             dt_str = f"{year}-{date} {time}"
-            party_time = datetime.strptime(dt_str, "%Y-%m/%d %H:%M")
+            current_year = datetime.now().year 
+            try:
+                party_time = datetime.strptime(dt_str, "%Y-%m/%d %H:%M")
+            except ValueError:
+                try:
+                    party_time = datetime.strptime(f"{current_year}-{date} {time}", "%Y-%m/%d %H:%M")
+                except ValueError:
+                    try:
+                        party_time = datetime.strptime(f"{current_year + 1}-{date} {time}", "%Y-%m/%d %H:%M")
+                    except ValueError:
+                        raise ValueError("날짜/시간 형식이 올바르지 않습니다.")
+
             reminder_time = party_time - timedelta(minutes=30)
 
             info.update({"dungeon": dungeon, "date": date, "time": time, "reminder_time": reminder_time.timestamp()})
@@ -280,8 +283,8 @@ class PartyEditButton(Button):
 
         except asyncio.TimeoutError:
             await interaction.followup.send("⏰ 시간 초과로 수정이 취소되었습니다.", ephemeral=True)
-        except ValueError:
-            await interaction.followup.send("⚠️ 날짜/시간 형식이 올바르지 않습니다. (예: `7/10 20:30`)", ephemeral=True)
+        except ValueError as e: 
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True) # ephemeral=True 추가
         except Exception as e:
             await interaction.followup.send(f"⚠️ 오류 발생: {e}", ephemeral=True)
 
@@ -293,7 +296,6 @@ class PartyView(View):
 
 @bot.command()
 async def 모집(ctx):
-    # DM에서 사용 불가능하게 수정 (guild가 없는 경우)
     if not ctx.guild:
         await ctx.send("이 명령어는 서버 채널에서만 사용할 수 있습니다.")
         return
@@ -314,16 +316,13 @@ async def 모집(ctx):
 
         year = datetime.now().year
         dt_str = f"{year}-{date} {time}"
-        # 현재 연도 확인 (2025-07-08)
         current_year = datetime.now().year 
         try:
             party_time = datetime.strptime(dt_str, "%Y-%m/%d %H:%M")
         except ValueError:
-            # 연도를 포함하지 않고 MM/DD 형식만 입력했을 경우 재시도
             try:
                 party_time = datetime.strptime(f"{current_year}-{date} {time}", "%Y-%m/%d %H:%M")
             except ValueError:
-                # 다음 연도로 넘어갔을 경우 (예: 12월에 다음해 1월 날짜 입력)
                 try:
                     party_time = datetime.strptime(f"{current_year + 1}-{date} {time}", "%Y-%m/%d %H:%M")
                 except ValueError:
@@ -334,7 +333,7 @@ async def 모집(ctx):
     except asyncio.TimeoutError:
         await ctx.send("⏰ 시간 초과로 파티 생성이 취소되었습니다.")
         return
-    except ValueError as e: # Value Error 메시지를 그대로 전달
+    except ValueError as e: 
         await ctx.send(f"⚠️ {e}")
         return
     except Exception as e:
@@ -344,7 +343,7 @@ async def 모집(ctx):
     thread = await ctx.channel.create_thread(
         name=f"{ctx.author.display_name}님의 파티 모집",
         type=discord.ChannelType.public_thread,
-        auto_archive_duration=60, # 스레드 비활성화 후 60분 뒤 자동 아카이브
+        auto_archive_duration=60, 
     )
 
     party_info = {
@@ -416,6 +415,7 @@ async def update_party_embed(thread_id):
 
 # ---
 ## MBTI 통계 기능
+
 @bot.command()
 async def mbti통계(ctx):
     """서버 내 MBTI 역할 통계를 보여줍니다."""
@@ -424,20 +424,15 @@ async def mbti통계(ctx):
         await ctx.send("이 명령어는 서버에서만 사용할 수 있습니다.")
         return
 
-    # MBTI 역할 이름 리스트 활용
     mbti_roles_dict = {name: guild.get_role(ROLE_IDS["MBTI"][name]) for name in MBTI_ROLE_NAMES if name in ROLE_IDS["MBTI"]}
-    
-    # 유효한 역할만 남기고, None인 역할 제거 (혹시 ID가 잘못되었을 경우 대비)
     mbti_roles_dict = {name: role for name, role in mbti_roles_dict.items() if role}
 
     if not mbti_roles_dict:
         await ctx.send("서버에 설정된 MBTI 역할이 없습니다. `ROLE_IDS['MBTI']` 또는 `MBTI_ROLE_NAMES`를 확인해주세요.")
         return
 
-    # MBTI별 사용자 수 카운트
     mbti_counts = {name: 0 for name in MBTI_ROLE_NAMES}
     
-    # 모든 멤버를 가져와 역할을 확인
     members = []
     async for member in guild.fetch_members(limit=None):
         members.append(member)
@@ -447,10 +442,8 @@ async def mbti통계(ctx):
             if role.name in mbti_counts:
                 mbti_counts[role.name] += 1
     
-    # 통계를 사용자 수가 많은 순서로 정렬
     sorted_mbti_counts = sorted(mbti_counts.items(), key=lambda item: item[1], reverse=True)
 
-    # 임베드 생성
     embed = discord.Embed(
         title="📊 서버 MBTI 통계",
         description="현재 서버 멤버들의 MBTI 역할 분포입니다.",
@@ -459,7 +452,7 @@ async def mbti통계(ctx):
 
     total_mbti_users = 0
     for mbti, count in sorted_mbti_counts:
-        if count > 0: # 0명인 MBTI는 표시하지 않음
+        if count > 0:
             embed.add_field(name=mbti, value=f"{count}명", inline=True)
             total_mbti_users += count
     
@@ -473,13 +466,13 @@ async def mbti통계(ctx):
 @bot.command()
 async def mbti확인(ctx, mbti_type: str):
     """특정 MBTI 역할을 가진 멤버 목록을 보여줍니다. (예: !mbti확인 ENFP)"""
-    mbti_type = mbti_type.upper() # 입력된 MBTI 유형을 대문자로 변환
+    mbti_type = mbti_type.upper() 
 
-    if mbti_type not in MBTI_ROLE_NAMES: # MBTI_ROLE_NAMES에 있는지 확인
+    if mbti_type not in MBTI_ROLE_NAMES: 
         await ctx.send(f"⚠️ '{mbti_type}'는 유효한 MBTI 역할이 아닙니다. 정확한 MBTI 유형을 입력해주세요. (예: ISTJ, ENFP)")
         return
 
-    role_id = ROLE_IDS["MBTI"].get(mbti_type) # MBTI 딕셔너리에서 ID 가져오기
+    role_id = ROLE_IDS["MBTI"].get(mbti_type) 
     if not role_id:
         await ctx.send(f"'{mbti_type}' 역할 ID를 `ROLE_IDS['MBTI']`에서 찾을 수 없습니다. 설정을 확인해주세요.")
         return
@@ -490,7 +483,6 @@ async def mbti확인(ctx, mbti_type: str):
         return
 
     members_with_role = []
-    # 모든 멤버를 가져와 해당 역할을 가진 멤버를 찾습니다.
     async for member in ctx.guild.fetch_members(limit=None):
         if mbti_role in member.roles:
             members_with_role.append(member.display_name)
@@ -502,7 +494,7 @@ async def mbti확인(ctx, mbti_type: str):
 
     if members_with_role:
         description_text = "\n".join(members_with_role)
-        if len(description_text) > 1900: # 디스코드 임베드 설명 최대 길이는 4096자이지만, 안전하게 1900자 정도로 제한
+        if len(description_text) > 1900: 
             description_text = description_text[:1900] + "\n...(이하 생략)"
         embed.description = description_text
         embed.set_footer(text=f"총 {len(members_with_role)}명")
@@ -511,17 +503,54 @@ async def mbti확인(ctx, mbti_type: str):
 
     await ctx.send(embed=embed)
 
+# ---
+## 명령어 도움말 기능
+
+@bot.command(name="도움말", aliases=["help", "명령어"])
+async def show_help(ctx):
+    """봇의 사용 가능한 명령어 목록을 보여줍니다."""
+    
+    embed = discord.Embed(
+        title="✨ 찡긋봇 명령어 도움말 ✨",
+        description="찡긋봇이 제공하는 명령어는 다음과 같습니다:",
+        color=0x7289DA 
+    )
+
+    embed.add_field(
+        name="🎉 파티 모집",
+        value="`!모집` - 새로운 파티 모집 스레드를 생성합니다.\n(스레드 내에서 파티 참여/수정 버튼 이용)",
+        inline=False
+    )
+
+    embed.add_field(
+        name="📊 MBTI 통계",
+        value="`!mbti통계` - 서버 내 MBTI 역할 분포를 보여줍니다.\n"
+              "`!mbti확인 [MBTI유형]` - 특정 MBTI 역할을 가진 멤버 목록을 보여줍니다. (예: `!mbti확인 ENFP`)",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📌 역할 선택 및 인증",
+        value="역할 선택은 `#역할-선택` 채널에서, 인증은 `#인증` 채널에서 버튼을 통해 진행할 수 있습니다.",
+        inline=False
+    )
+
+    embed.set_footer(text=f"문의사항은 서버 관리자에게 문의해주세요. | 봇 버전: v0.1")
+    embed.set_thumbnail(url=bot.user.avatar.url if bot.user.avatar else discord.Embed.Empty)
+
+    await ctx.send(embed=embed)
+
+
 # === 리마인더 루프 ===
 async def reminder_loop():
     await bot.wait_until_ready()
     while not bot.is_closed():
         now = datetime.now().timestamp()
-        # party_infos 딕셔너리를 복사하여 순회 중 수정되는 것을 방지
         for thread_id_str, info in list(state["party_infos"].items()):
             reminder_time = info.get("reminder_time")
             if reminder_time and now >= reminder_time:
                 guild = bot.get_guild(YOUR_GUILD_ID)
-                if not guild: # 길드를 찾을 수 없으면 다음 파티로
+                if not guild: 
                     print(f"경고: 길드 ID {YOUR_GUILD_ID}를 찾을 수 없습니다. (리마인더 루프)")
                     continue
 
@@ -538,7 +567,6 @@ async def reminder_loop():
                             f"⏰ **리마인더 알림!**\n{' '.join(mentions)}\n"
                             f"`{info['dungeon']}` 던전이 30분 후에 시작됩니다!"
                         )
-                        # 알림 후에는 reminder_time을 초기화하여 다시 알림이 가지 않도록 함
                         info["reminder_time"] = None
                         save_state()
                     except Exception as e:
@@ -559,39 +587,30 @@ async def on_ready():
         except Exception as e:
             print(f"닉네임 변경 실패: {e}")
 
-        # 역할 선택 메시지 초기화 및 유지 관리
         role_channel = guild.get_channel(ROLE_SELECT_CHANNEL_ID)
         if role_channel:
-            # 봇이 재시작될 때 기존 뷰를 다시 등록
-            bot.add_view(CategorySelectView()) # 카테고리 선택 뷰 등록 (직업/MBTI 선택)
-            # RoleButtonsView는 메시지 edit_message 시에 생성되므로 여기서 직접 add_view 할 필요 없음
-            bot.add_view(VerifyView()) # 인증 뷰 등록 (봇 재시작 시에도 유지)
-            bot.add_view(PartyView()) # 파티 모집 뷰 등록 (봇 재시작 시에도 유지)
+            bot.add_view(CategorySelectView()) 
+            bot.add_view(VerifyView()) 
+            bot.add_view(PartyView()) 
 
-            # initial_message_id가 저장되어 있는지 확인
             if state["initial_message_id"]:
                 try:
-                    # 저장된 메시지 ID로 메시지를 가져옴
                     initial_msg = await role_channel.fetch_message(state["initial_message_id"])
-                    # 메시지가 존재하면 뷰를 다시 연결 (메시지 내용을 바꾸지 않아도 뷰만 새로 연결 가능)
-                    # 만약 메시지 내용도 항상 최신으로 하고 싶다면 content 인자도 추가
                     await initial_msg.edit(view=CategorySelectView()) 
                     print(f"✅ 기존 역할 선택 초기 메시지 ({state['initial_message_id']})에 뷰 재등록 완료.")
                 except discord.NotFound:
                     print(f"⚠️ 저장된 역할 선택 초기 메시지 ({state['initial_message_id']})를 찾을 수 없습니다. 새로 전송합니다.")
-                    state["initial_message_id"] = None # 메시지가 없으므로 ID 초기화
+                    state["initial_message_id"] = None 
                     save_state()
                 except Exception as e:
                     print(f"역할 선택 초기 메시지 확인 중 오류 발생: {e}")
-                    state["initial_message_id"] = None # 오류 발생 시 ID 초기화
+                    state["initial_message_id"] = None 
                     save_state()
 
-            # 메시지가 없거나, 찾을 수 없어서 ID가 초기화된 경우에만 새로 보냄
             if not state["initial_message_id"]:
                 try:
-                    # 초기 카테고리 선택 메시지 전송
                     msg = await role_channel.send(
-                        "👇 아래 버튼을 눌러 `아르카나` 또는 `MBTI` 역할을 선택하세요!", # '직업'을 '아르카나'로 변경
+                        "👇 아래 버튼을 눌러 `아르카나` 또는 `MBTI` 역할을 선택하세요!", 
                         view=CategorySelectView()
                     )
                     state["initial_message_id"] = msg.id
@@ -600,26 +619,15 @@ async def on_ready():
                 except Exception as e:
                     print(f"역할 선택 초기 메시지 전송 오류: {e}")
 
-        # 인증 메시지 초기화 및 유지 관리
         verify_channel = guild.get_channel(VERIFY_CHANNEL_ID)
         if verify_channel:
-            # 이전에 보낸 인증 메시지가 있다면 찾아서 뷰를 재연결
-            # 여기서는 편의상 "인증 메시지"라는 고정된 메시지 ID를 state에 저장하지 않고,
-            # 채널의 마지막 메시지를 확인하는 방법을 시도하거나 (불확실성 높음),
-            # 아니면 아예 매번 새로 보내도록 유지할 수 있습니다.
-            # 현재는 매번 새로 보내는 방식이므로, 중복 방지를 원한다면 initial_message_id와 유사한 로직이 필요합니다.
-            
-            # 현재 코드 유지 (항상 새로 보내기)
             try:
-                # 채널의 최신 5개 메시지 중 봇이 보낸 인증 메시지가 있는지 확인하여 중복 방지 (완벽하진 않음)
-                # 이 로직은 간단한 예시이며, 완벽한 중복 방지를 위해서는 initial_message_id와 같은 별도의 상태 관리가 필요합니다.
                 found_existing_verify_msg = False
                 async for msg_history in verify_channel.history(limit=5):
                     if msg_history.author == bot.user and "✅ 서버에 오신 걸 환영합니다!" in msg_history.content:
                         found_existing_verify_msg = True
                         print("✅ 기존 인증 메시지 발견. 뷰 재등록 시도.")
                         try:
-                            # 기존 메시지에 뷰만 다시 연결
                             await msg_history.edit(view=VerifyView())
                             print("✅ 기존 인증 메시지에 뷰 재등록 완료.")
                         except Exception as e_edit:
@@ -635,10 +643,8 @@ async def on_ready():
             except Exception as e:
                 print(f"인증 메시지 전송 오류: {e}")
 
-
-    # 리마인더 루프 시작
     bot.loop.create_task(reminder_loop())
 
 # === 시작 ===
-load_state() # 봇 실행 전 상태 로드
+load_state() 
 bot.run(TOKEN)
