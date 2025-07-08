@@ -20,11 +20,13 @@ else:
 # === 설정 ===
 YOUR_GUILD_ID = 1388092210519605361
 ROLE_SELECT_CHANNEL_ID = 1388211020576587786
-VERIFY_CHANNEL_ID = 1391373955507552296  # 인증 버튼 메시지를 보낼 채널
-VERIFIED_ROLE_ID = 1390356825454416094     # 인증 완료 역할
-VERIFY_LOG_CHANNEL_ID = 1391756822763012190  # 인증 로그 채널
+VERIFY_CHANNEL_ID = 1391373955507552296   # 인증 버튼 메시지를 보낼 채널
+VERIFIED_ROLE_ID = 1390356825454416094      # 인증 완료 역할
+VERIFY_LOG_CHANNEL_ID = 1391756822763012190   # 인증 로그 채널
 
+# 역할 ID 목록 (직업 역할 + MBTI 역할)
 ROLE_IDS = {
+    # 직업 역할
     "세이크리드 가드": 1388109175703470241,
     "다크 메이지": 1388109120141262858,
     "세인트 바드": 1388109253000036384,
@@ -33,7 +35,31 @@ ROLE_IDS = {
     "알케믹 스팅어": 1389897468761870428,
     "포비든 알케미스트": 1389897592061558908,
     "배리어블 거너": 1389897731463581736,
+    # MBTI 역할 추가
+    "ISTJ": 1391719641327599717,
+    "ISFJ": 1391789705716306063,
+    "INFJ": 1391789913942524095,
+    "INTJ": 1391788061448208524,
+    "ISTP": 1392017470323298334,
+    "ISFP": 1391789971702288536,
+    "INFP": 1391715412504350730,
+    "INTP": 1391790057798504570,
+    "ESTP": 1391790142464987156,
+    "ESFP": 1391790201902334133,
+    "ENFP": 1391790284131532800,
+    "ENTP": 1391790424829722794,
+    "ESTJ": 1391790662554484906,
+    "ESFJ": 1391790746016682056,
+    "ENFJ": 1391719175600345180,
+    "ENTJ": 1391790926036209835,
 }
+
+# MBTI 역할 이름만 따로 리스트로 정의 (통계 계산 시 유용)
+MBTI_ROLE_NAMES = [
+    "ISTJ", "ISFJ", "INFJ", "INTJ", "ISTP", "ISFP", "INFP", "INTP",
+    "ESTP", "ESFP", "ENFP", "ENTP", "ESTJ", "ESFJ", "ENFJ", "ENTJ"
+]
+
 
 DATA_FILE = "data.json"
 state = {"role_message_id": None, "party_infos": {}}
@@ -67,24 +93,48 @@ class RoleToggleButton(Button):
         self.role_name = role_name
 
     async def callback(self, interaction: discord.Interaction):
-        role = interaction.guild.get_role(ROLE_IDS[self.role_name])
+        role_id = ROLE_IDS.get(self.role_name)
+        if not role_id:
+            await interaction.response.send_message(f"'{self.role_name}' 역할 ID를 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        role = interaction.guild.get_role(role_id)
+        if not role:
+            await interaction.response.send_message(f"'{self.role_name}' 역할을 서버에서 찾을 수 없습니다.", ephemeral=True)
+            return
+
         if role in interaction.user.roles:
             await interaction.user.remove_roles(role)
             await interaction.response.send_message(f"'{self.role_name}' 역할이 제거되었습니다.", ephemeral=True)
         else:
+            # MBTI 역할은 한 번에 하나만 가질 수 있도록 처리
+            if self.role_name in MBTI_ROLE_NAMES:
+                for existing_role in interaction.user.roles:
+                    if existing_role.name in MBTI_ROLE_NAMES:
+                        await interaction.user.remove_roles(existing_role)
+                        break # MBTI 역할은 하나만 제거하면 됨
+            
             await interaction.user.add_roles(role)
             await interaction.response.send_message(f"'{self.role_name}' 역할이 추가되었습니다.", ephemeral=True)
 
 class RoleSelectView(View):
     def __init__(self):
         super().__init__(timeout=None)
+        # 직업 및 MBTI 이모지 매핑
         emoji_map = {
             "세이크리드 가드": "🛡️", "다크 메이지": "🔮", "세인트 바드": "🎵",
             "블래스트 랜서": "⚔️", "엘레멘탈 나이트": "🗡️", "알케믹 스팅어": "🧪",
-            "포비든 알케미스트": "☠️", "배리어블 거너": "🔫"
+            "포비든 알케미스트": "☠️", "배리어블 거너": "🔫",
+            # MBTI 이모지 (원하는 이모지로 변경 가능)
+            "ISTJ": "🧱", "ISFJ": "💖", "INFJ": "💡", "INTJ": "🧠",
+            "ISTP": "🛠️", "ISFP": "🎨", "INFP": "🌸", "INTP": "🤔",
+            "ESTP": "⚡", "ESFP": "🥳", "ENFP": "🌈", "ENTP": "💡",
+            "ESTJ": "🏛️", "ESFJ": "🤝", "ENFJ": "🌟", "ENTJ": "👑",
         }
-        for role in ROLE_IDS:
-            self.add_item(RoleToggleButton(role, emoji_map[role]))
+        for role_name in ROLE_IDS:
+            # ROLE_IDS에 있는 모든 역할에 대해 버튼 생성
+            # emoji_map에 없는 역할은 기본 이모지 '❓' 사용
+            self.add_item(RoleToggleButton(role_name, emoji_map.get(role_name, "❓")))
 
 # === 인증 버튼 ===
 class VerifyButton(Button):
@@ -110,9 +160,13 @@ class VerifyView(View):
 # === 파티 모집 ===
 class PartyRoleSelect(Select):
     def __init__(self):
+        # 직업 역할만 셀렉트 메뉴에 포함
         options = [
             discord.SelectOption(label=role, emoji=emoji)
-            for role, emoji in zip(ROLE_IDS.keys(), ["🛡️", "🔮", "🎵", "⚔️", "🗡️", "🧪", "☠️", "🔫"])
+            for role, emoji in zip(
+                ["세이크리드 가드", "다크 메이지", "세인트 바드", "블래스트 랜서", "엘레멘탈 나이트", "알케믹 스팅어", "포비든 알케미스트", "배리어블 거너"],
+                ["🛡️", "🔮", "🎵", "⚔️", "🗡️", "🧪", "☠️", "🔫"]
+            )
         ] + [discord.SelectOption(label="참여 취소", emoji="❌")]
         super().__init__(placeholder="직업을 선택하거나 참여 취소하세요!", min_values=1, max_values=1, options=options)
 
@@ -262,6 +316,104 @@ async def update_party_embed(thread_id):
         except Exception as e:
             print(f"임베드 수정 실패: {e}")
 
+# ---
+## MBTI 통계 기능
+---
+
+@bot.command()
+async def mbti통계(ctx):
+    """서버 내 MBTI 역할 통계를 보여줍니다."""
+    guild = ctx.guild
+    if not guild:
+        await ctx.send("이 명령어는 서버에서만 사용할 수 있습니다.")
+        return
+
+    # MBTI 역할만 필터링 (MBTI_ROLE_NAMES 리스트 활용)
+    mbti_roles = {name: guild.get_role(ROLE_IDS[name]) for name in MBTI_ROLE_NAMES if name in ROLE_IDS}
+    
+    # 유효한 역할만 남기고, None인 역할 제거 (혹시 ID가 잘못되었을 경우 대비)
+    mbti_roles = {name: role for name, role in mbti_roles.items() if role}
+
+    if not mbti_roles:
+        await ctx.send("서버에 설정된 MBTI 역할이 없습니다. `ROLE_IDS` 또는 `MBTI_ROLE_NAMES`를 확인해주세요.")
+        return
+
+    # MBTI별 사용자 수 카운트
+    mbti_counts = {name: 0 for name in MBTI_ROLE_NAMES}
+    # 길드 멤버를 순회하며 각 멤버가 가진 역할을 확인
+    async for member in guild.fetch_members(limit=None): # 모든 멤버를 가져오기 위해 limit=None 사용
+        for role in member.roles:
+            if role.name in mbti_counts:
+                mbti_counts[role.name] += 1
+    
+    # 통계를 사용자 수가 많은 순서로 정렬
+    sorted_mbti_counts = sorted(mbti_counts.items(), key=lambda item: item[1], reverse=True)
+
+    # 임베드 생성
+    embed = discord.Embed(
+        title="📊 서버 MBTI 통계",
+        description="현재 서버 멤버들의 MBTI 역할 분포입니다.",
+        color=0x7289DA  # Discord 기본 색상
+    )
+
+    # 필드에 통계 추가
+    total_mbti_users = 0
+    for mbti, count in sorted_mbti_counts:
+        if count > 0: # 0명인 MBTI는 표시하지 않음
+            embed.add_field(name=mbti, value=f"{count}명", inline=True)
+            total_mbti_users += count
+    
+    if total_mbti_users == 0:
+        embed.description = "아직 MBTI 역할을 선택한 사용자가 없습니다."
+
+    embed.set_footer(text=f"총 MBTI 선택 사용자: {total_mbti_users}명")
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+async def mbti확인(ctx, mbti_type: str):
+    """특정 MBTI 역할을 가진 멤버 목록을 보여줍니다. (예: !mbti확인 ENFP)"""
+    mbti_type = mbti_type.upper() # 입력된 MBTI 유형을 대문자로 변환
+
+    if mbti_type not in MBTI_ROLE_NAMES: # MBTI_ROLE_NAMES에 있는지 확인
+        await ctx.send(f"⚠️ '{mbti_type}'는 유효한 MBTI 역할이 아닙니다. 정확한 MBTI 유형을 입력해주세요. (예: ISTJ, ENFP)")
+        return
+
+    role_id = ROLE_IDS.get(mbti_type)
+    if not role_id:
+        await ctx.send(f"'{mbti_type}' 역할 ID를 `ROLE_IDS`에서 찾을 수 없습니다. 설정을 확인해주세요.")
+        return
+
+    mbti_role = ctx.guild.get_role(role_id)
+    if not mbti_role:
+        await ctx.send(f"'{mbti_type}' 역할이 서버에 존재하지 않습니다. `ROLE_IDS` 설정을 확인해주세요.")
+        return
+
+    members_with_role = []
+    # 길드 멤버를 순회하며 해당 역할을 가진 멤버를 찾습니다.
+    async for member in ctx.guild.fetch_members(limit=None): # 모든 멤버를 가져오기 위해 limit=None 사용
+        if mbti_role in member.roles:
+            members_with_role.append(member.display_name)
+    
+    embed = discord.Embed(
+        title=f"👥 {mbti_type} 유형 멤버 목록",
+        color=0x7289DA
+    )
+
+    if members_with_role:
+        # 멤버가 많을 경우 디스코드 메시지 길이 제한(2000자)을 고려해야 합니다.
+        # 여기서는 간단하게 모두 나열하되, 메시지가 너무 길어지면 잘릴 수 있습니다.
+        # 실제 운영에서는 페이지네이션 등의 고급 처리가 필요할 수 있습니다.
+        description_text = "\n".join(members_with_role)
+        if len(description_text) > 1900: # 대략적인 안전선
+            description_text = description_text[:1900] + "\n...(이하 생략)"
+        embed.description = description_text
+        embed.set_footer(text=f"총 {len(members_with_role)}명")
+    else:
+        embed.description = f"현재 '{mbti_type}' 역할을 가진 멤버가 없습니다."
+
+    await ctx.send(embed=embed)
+
 # === 리마인더 루프 ===
 async def reminder_loop():
     await bot.wait_until_ready()
@@ -303,18 +455,38 @@ async def on_ready():
 
         role_channel = guild.get_channel(ROLE_SELECT_CHANNEL_ID)
         if role_channel:
-            try:
-                if state["role_message_id"]:
+            message_exists = False
+            if state["role_message_id"]:
+                try:
+                    # 저장된 메시지 ID가 있으면 해당 메시지를 가져와서 존재하는지 확인
                     await role_channel.fetch_message(state["role_message_id"])
-                else:
-                    msg = await role_channel.send("👇 원하는 직업 역할을 선택하세요!", view=RoleSelectView())
+                    message_exists = True
+                    print(f"✅ 기존 역할 선택 메시지 ({state['role_message_id']}) 발견.")
+                except discord.NotFound:
+                    # 메시지가 디스코드에서 삭제된 경우
+                    print(f"⚠️ 저장된 역할 선택 메시지 ({state['role_message_id']})를 찾을 수 없습니다. (삭제되었을 가능성)")
+                    state["role_message_id"] = None # 메시지가 없으므로 ID 초기화
+                    save_state()
+                except Exception as e:
+                    # 그 외 메시지 확인 중 오류 발생
+                    print(f"역할 선택 메시지 확인 중 오류 발생: {e}")
+                    state["role_message_id"] = None # 오류 발생 시 ID 초기화
+                    save_state()
+
+            # 메시지가 존재하지 않거나, 존재했지만 찾을 수 없어서 ID가 초기화된 경우에만 새로 보냄
+            if not message_exists:
+                try:
+                    msg = await role_channel.send("👇 원하는 직업 또는 MBTI 역할을 선택하세요!", view=RoleSelectView())
                     state["role_message_id"] = msg.id
                     save_state()
-            except Exception as e:
-                print(f"역할 선택 메시지 오류: {e}")
+                    print(f"✅ 새로운 역할 선택 메시지 ({msg.id}) 전송 완료.")
+                except Exception as e:
+                    print(f"역할 선택 메시지 전송 오류: {e}")
 
         verify_channel = guild.get_channel(VERIFY_CHANNEL_ID)
         if verify_channel:
+            # 인증 메시지는 매 봇 시작 시 보내도록 유지합니다.
+            # 만약 인증 메시지도 한 번만 보내고 싶다면, 역할 선택 메시지와 유사하게 상태를 관리해야 합니다.
             try:
                 await verify_channel.send(
                     "✅ 서버에 오신 걸 환영합니다!\n아래 버튼을 눌러 인증을 완료해주세요.",
