@@ -21,8 +21,9 @@ else:
 YOUR_GUILD_ID = 1388092210519605361
 ROLE_SELECT_CHANNEL_ID = 1388211020576587786
 VERIFY_CHANNEL_ID = 1391373955507552296    # 인증 버튼 메시지를 보낼 채널
-VERIFIED_ROLE_ID = 1390356825454416094       # 인증 완료 역할
+VERIFIED_ROLE_ID = 1390356825454416094      # 인증 완료 역할
 VERIFY_LOG_CHANNEL_ID = 1391756822763012190    # 인증 로그 채널
+WELCOME_CHANNEL_ID = 1390643886656847983 # <<<<< 여기에 "반갑죠채널"의 실제 채널 ID를 입력하세요!
 
 # 역할 ID 목록 (직업 역할 + MBTI 역할)
 ROLE_IDS = {
@@ -643,6 +644,29 @@ async def on_ready():
                 print(f"인증 메시지 전송 오류: {e}")
 
     bot.loop.create_task(reminder_loop())
+
+# === 새 멤버가 서버에 들어올 때 작동하는 함수 추가 ===
+@bot.event
+async def on_member_join(member):
+    guild = member.guild
+    if guild.id == YOUR_GUILD_ID: # 봇이 설정된 길드인지 확인
+        welcome_channel = guild.get_channel(WELCOME_CHANNEL_ID)
+        if welcome_channel:
+            # Welcome 메시지 구성 (인증 및 역할 선택 채널 멘션 포함)
+            welcome_message = (
+                f"{member.mention} 님, 찡긋 길드 디스코드 서버에 오신 것을 환영합니다!\n\n"
+                f"저희 서버는 **인증**을 해야 모든 채널을 이용할 수 있습니다. 🧐\n\n"
+                f"1. 먼저 <#{VERIFY_CHANNEL_ID}> 채널로 이동하여 **`인증하죠`** 버튼을 눌러주세요!\n"
+                f"2. 인증 완료 후 <#{ROLE_SELECT_CHANNEL_ID}> 채널에서 **아르카나 및 MBTI 역할**을 선택해주세요!\n\n"
+                "즐거운 시간 되세요! 😄"
+            )
+            await welcome_channel.send(welcome_message)
+            print(f"✅ {member.display_name} 님께 환영 메시지 전송 완료. (채널: {welcome_channel.name})")
+        else:
+            print(f"⚠️ 환영 메시지를 보낼 채널 (ID: {WELCOME_CHANNEL_ID})을 찾을 수 없습니다. 채널 ID를 확인해주세요.")
+    else:
+        print(f"⚠️ 봇이 설정된 길드 ({YOUR_GUILD_ID})가 아닌 다른 길드에 멤버가 조인했습니다.")
+
 
 # === 시작 ===
 load_state() 
