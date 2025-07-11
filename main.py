@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.ui import Button, View, Select
 
 # === .env 로드 ===
@@ -21,9 +21,15 @@ else:
 YOUR_GUILD_ID = 1388092210519605361
 ROLE_SELECT_CHANNEL_ID = 1388211020576587786
 VERIFY_CHANNEL_ID = 1391373955507552296    # 인증 버튼 메시지를 보낼 채널
-VERIFIED_ROLE_ID = 1390356825454416094      # 인증 완료 역할
-VERIFY_LOG_CHANNEL_ID = 1391756822763012190    # 인증 로그 채널
-WELCOME_CHANNEL_ID = 1390643886656847983 # <<<<< 여기에 "반갑죠채널"의 실제 채널 ID를 입력하세요!
+VERIFIED_ROLE_ID = 1390356825454416094      # 인증 완료 역할 (이 역할이 '찡긋' 역할이 됩니다)
+GUEST_ROLE_ID = 1392288019623835686      # '손님' 역할 ID (Discord에서 생성 후 여기에 붙여넣으세요!)
+VERIFY_LOG_CHANNEL_ID = 1391756822763012190     # 인증 로그 채널
+WELCOME_CHANNEL_ID = 1390643886656847983 # "반갑죠채널"의 실제 채널 ID
+
+# --- 인증 질문/답변 설정 ---
+VERIFY_QUESTION = "찡긋 디스코드 채널에 오신것을 환영합니다.\n안내받은 코드를 입력하세요.\n(코드가 없을 경우 승인이 불가합니다.)"
+VERIFY_ANSWER = "20211113"
+VERIFY_TIMEOUT = 60 # 답변 대기 시간 (초)
 
 # 역할 ID 목록 (직업 역할 + MBTI 역할)
 ROLE_IDS = {
@@ -88,7 +94,7 @@ def load_state():
 
 # === 인텐트 및 봇 초기화 ===
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None) # <--- 이 부분에 help_command=None 추가
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # === 역할 선택 UI 개선: 아르카나/MBTI 탭 ===
 
@@ -106,9 +112,9 @@ EMOJI_MAP = {
 class RoleSelectButton(Button):
     def __init__(self, role_name, emoji, role_type):
         super().__init__(
-            label=role_name, 
-            style=discord.ButtonStyle.secondary, 
-            emoji=emoji, 
+            label=role_name,
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji,
             custom_id=f"{role_type}_{role_name}_button" # 고유 custom_id 추가
         )
         self.role_name = role_name
@@ -132,9 +138,9 @@ class RoleSelectButton(Button):
             # MBTI 역할은 한 번에 하나만 가질 수 있도록 처리
             if self.role_type == "MBTI":
                 for existing_role in interaction.user.roles:
-                    if existing_role.name in MBTI_ROLE_NAMES:
+                    if existing_role.name in MBTI_ROLE_NAMES: # MBTI 역할 이름 리스트를 사용하여 체크
                         await interaction.user.remove_roles(existing_role)
-                        break 
+                        break
             
             await interaction.user.add_roles(role)
             await interaction.response.send_message(f"'{self.role_name}' 역할이 추가되었습니다.", ephemeral=True)
@@ -143,20 +149,20 @@ class RoleSelectButton(Button):
 class CategorySelectView(View):
     """아르카나/MBTI 카테고리를 선택하는 초기 뷰"""
     def __init__(self):
-        super().__init__(timeout=None) 
+        super().__init__(timeout=None)
 
     @discord.ui.button(label="아르카나 선택", style=discord.ButtonStyle.primary, custom_id="job_select_button", emoji="💫")
     async def job_select_button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(
             content="👇 원하는 **아르카나 역할**을 선택하거나, `MBTI 선택` 버튼을 눌러주세요.",
-            view=RoleButtonsView("JOB") 
+            view=RoleButtonsView("JOB")
         )
 
     @discord.ui.button(label="MBTI 선택", style=discord.ButtonStyle.success, custom_id="mbti_select_button", emoji="🎭")
     async def mbti_select_button_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(
             content="👇 원하는 **MBTI 역할**을 선택하거나, `아르카나 선택` 버튼을 눌러주세요.",
-            view=RoleButtonsView("MBTI") 
+            view=RoleButtonsView("MBTI")
         )
 
 class RoleButtonsView(View):
@@ -174,30 +180,70 @@ class RoleButtonsView(View):
 
 class BackToCategoryButton(Button):
     """카테고리 선택 뷰로 돌아가는 버튼"""
-    def __init__(self):
-        super().__init__(label="🔙 뒤로가기", style=discord.ButtonStyle.danger, row=4, custom_id="back_to_category_button") 
+    def __init__(self, ):
+        super().__init__(label="🔙 뒤로가기", style=discord.ButtonStyle.danger, row=4, custom_id="back_to_category_button")
     
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.edit_message(
             content="👇 아래 버튼을 눌러 `아르카나` 또는 `MBTI` 역할을 선택하세요!",
-            view=CategorySelectView() 
+            view=CategorySelectView()
         )
 
-# === 인증 버튼 ===
+# === 인증 버튼 수정: 질문/답변 추가 ===
 class VerifyButton(Button):
     def __init__(self, label="✅ 인증하죠", style=discord.ButtonStyle.success, emoji="🪪"):
-        super().__init__(label=label, style=style, emoji=emoji, custom_id="verify_button") 
+        super().__init__(label=label, style=style, emoji=emoji, custom_id="verify_button")
 
     async def callback(self, interaction: discord.Interaction):
-        role = interaction.guild.get_role(VERIFIED_ROLE_ID)
-        if role in interaction.user.roles:
-            await interaction.response.send_message("이미 인증된 사용자입니다! 😉", ephemeral=True)
-        else:
-            await interaction.user.add_roles(role)
-            await interaction.response.send_message("성공적으로 인증되었어요! 🎉", ephemeral=True)
-            log_channel = interaction.guild.get_channel(VERIFY_LOG_CHANNEL_ID)
-            if log_channel:
-                await log_channel.send(f"🛂 {interaction.user.mention} 님이 인증되었습니다! (`{interaction.user.name}`)")
+        verified_role = interaction.guild.get_role(VERIFIED_ROLE_ID)
+        guest_role = interaction.guild.get_role(GUEST_ROLE_ID)
+
+        if verified_role in interaction.user.roles:
+            return await interaction.response.send_message("이미 인증된 사용자입니다! 😉", ephemeral=True)
+
+        # DM으로 인증 질문 전송
+        try:
+            await interaction.user.send(f"**인증 질문:**\n\n{VERIFY_QUESTION}")
+            await interaction.response.send_message("DM으로 인증 질문을 보냈습니다. DM을 확인하고 코드를 입력해주세요! ✉️", ephemeral=True)
+
+            def check(m):
+                return m.author == interaction.user and m.channel == interaction.user.dm_channel
+
+            try:
+                # 사용자의 답변을 기다림 (VERIFY_TIMEOUT 초 동안)
+                answer_msg = await bot.wait_for("message", timeout=VERIFY_TIMEOUT, check=check)
+
+                # 답변이 정확한지 확인
+                if answer_msg.content.strip() == VERIFY_ANSWER:
+                    # 인증 성공 로직
+                    await interaction.user.add_roles(verified_role)
+                    if guest_role and guest_role in interaction.user.roles:
+                        await interaction.user.remove_roles(guest_role)
+                    
+                    await interaction.user.send("✅ 코드가 확인되었습니다! 성공적으로 인증되었어요! 이제 모든 채널을 이용할 수 있습니다! 🎉")
+                    log_channel = interaction.guild.get_channel(VERIFY_LOG_CHANNEL_ID)
+                    if log_channel:
+                        await log_channel.send(f"🛂 {interaction.user.mention} 님이 **찡긋** 역할로 인증되었습니다! (`{interaction.user.name}`)")
+                else:
+                    # 답변이 틀렸을 경우
+                    await interaction.user.send("❌ 코드가 틀렸습니다. 다시 인증 버튼을 눌러 시도해주세요. 올바른 코드를 확인해주세요.")
+            except asyncio.TimeoutError:
+                # 시간 초과 시
+                await interaction.user.send(f"⏰ {VERIFY_TIMEOUT}초 내에 답변이 없어서 인증이 취소되었습니다. 다시 인증 버튼을 눌러 시도해주세요.")
+            except Exception as e:
+                # 그 외 예외 처리
+                await interaction.user.send(f"인증 중 알 수 없는 오류가 발생했습니다. 잠시 후 다시 시도해주세요. ({e})")
+                print(f"인증 DM 답변 처리 중 오류: {e}")
+
+        except discord.Forbidden:
+            # DM을 보낼 수 없는 경우 (사용자가 DM을 막아놓았을 때)
+            await interaction.response.send_message(
+                "DM을 보낼 수 없습니다. 개인정보 설정에서 서버 멤버로부터의 DM을 허용해주세요. "
+                "DM 설정 변경 후 다시 인증 버튼을 눌러 시도해주세요.", ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(f"인증 질문 전송 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요. ({e})", ephemeral=True)
+            print(f"인증 질문 DM 전송 오류: {e}")
 
 class VerifyView(View):
     def __init__(self):
@@ -209,7 +255,7 @@ class PartyRoleSelect(Select):
     def __init__(self):
         options = [
             discord.SelectOption(label=role, emoji=EMOJI_MAP.get(role, "❓"))
-            for role in ROLE_IDS["JOB"].keys() 
+            for role in ROLE_IDS["JOB"].keys()
         ] + [discord.SelectOption(label="참여 취소", emoji="❌")]
         super().__init__(placeholder="아르카나를 선택하거나 참여 취소하세요!", min_values=1, max_values=1, options=options, custom_id="party_role_select")
 
@@ -223,8 +269,11 @@ class PartyRoleSelect(Select):
         selected = self.values[0]
 
         if selected == "참여 취소":
-            info["participants"].pop(str(user.id), None)
-            await interaction.response.send_message("파티 참여가 취소되었습니다.", ephemeral=True)
+            if str(user.id) in info["participants"]:
+                info["participants"].pop(str(user.id), None)
+                await interaction.response.send_message("파티 참여가 취소되었습니다.", ephemeral=True)
+            else:
+                await interaction.response.send_message("아직 이 파티에 참여하지 않았습니다.", ephemeral=True)
         else:
             info["participants"][str(user.id)] = selected
             await interaction.response.send_message(f"'{selected}' 역할로 파티에 참여했습니다!", ephemeral=True)
@@ -234,7 +283,7 @@ class PartyRoleSelect(Select):
 
 class PartyEditButton(Button):
     def __init__(self, label="✏️ 파티 정보 수정", style=discord.ButtonStyle.primary):
-        super().__init__(label=label, style=style, custom_id="party_edit_button") 
+        super().__init__(label=label, style=style, custom_id="party_edit_button")
 
     async def callback(self, interaction: discord.Interaction):
         thread_id = interaction.channel.id
@@ -258,34 +307,37 @@ class PartyEditButton(Button):
                 return
 
             dungeon = content_parts[0]
-            date = content_parts[1]
-            time = content_parts[2]
+            date_str = content_parts[1]
+            time_str = content_parts[2]
 
-            year = datetime.now().year
-            dt_str = f"{year}-{date} {time}"
-            current_year = datetime.now().year 
-            try:
-                party_time = datetime.strptime(dt_str, "%Y-%m/%d %H:%M")
-            except ValueError:
+            # 파티 시간 파싱 로직 개선
+            current_year = datetime.now().year
+            party_time = None
+            for year_offset in [0, 1]: # 현재 연도, 다음 연도 시도
                 try:
-                    party_time = datetime.strptime(f"{current_year}-{date} {time}", "%Y-%m/%d %H:%M")
+                    # '월/일' 형식을 위해 strptime 형식 변경
+                    party_time = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
+                    # 만약 파싱된 시간이 현재보다 과거라면 다음 연도를 시도 (단, 1년 이상 과거는 아님)
+                    if party_time < datetime.now() and year_offset == 0:
+                        continue # 다음 연도로 다시 시도
+                    break # 성공적으로 파싱했으면 루프 종료
                 except ValueError:
-                    try:
-                        party_time = datetime.strptime(f"{current_year + 1}-{date} {time}", "%Y-%m/%d %H:%M")
-                    except ValueError:
-                        raise ValueError("날짜/시간 형식이 올바르지 않습니다.")
+                    continue # 파싱 실패 시 다음 연도 시도
+            
+            if not party_time:
+                raise ValueError("날짜/시간 형식이 올바르지 않거나 유효하지 않은 날짜입니다. (예: 7/10 20:30)")
 
             reminder_time = party_time - timedelta(minutes=30)
 
-            info.update({"dungeon": dungeon, "date": date, "time": time, "reminder_time": reminder_time.timestamp()})
+            info.update({"dungeon": dungeon, "date": date_str, "time": time_str, "reminder_time": reminder_time.timestamp()})
             save_state()
             await update_party_embed(thread_id)
             await interaction.followup.send("✅ 파티 정보가 성공적으로 수정되었습니다!", ephemeral=True)
 
         except asyncio.TimeoutError:
             await interaction.followup.send("⏰ 시간 초과로 수정이 취소되었습니다.", ephemeral=True)
-        except ValueError as e: 
-            await interaction.followup.send(f"⚠️ {e}", ephemeral=True) 
+        except ValueError as e:
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"⚠️ 오류 발생: {e}", ephemeral=True)
 
@@ -301,6 +353,12 @@ async def 모집(ctx):
         await ctx.send("이 명령어는 서버 채널에서만 사용할 수 있습니다.")
         return
 
+    # '찡긋' 역할이 없는 사용자에게는 명령어 사용을 제한
+    verified_role = ctx.guild.get_role(VERIFIED_ROLE_ID)
+    if not verified_role or verified_role not in ctx.author.roles:
+        await ctx.send("⛔ 파티 모집은 `찡긋` 역할을 가진 멤버만 가능합니다. 먼저 인증을 완료해주세요!", ephemeral=True)
+        return
+
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
     await ctx.send("📥 파티 정보를 한 줄로 입력해주세요. 예: `브리레흐1-3관 7/6 20:00`")
     
@@ -312,29 +370,30 @@ async def 모집(ctx):
             return
 
         dungeon = content_parts[0]
-        date = content_parts[1]
-        time = content_parts[2]
+        date_str = content_parts[1]
+        time_str = content_parts[2]
 
-        year = datetime.now().year
-        dt_str = f"{year}-{date} {time}"
-        current_year = datetime.now().year 
-        try:
-            party_time = datetime.strptime(dt_str, "%Y-%m/%d %H:%M")
-        except ValueError:
+        # 파티 시간 파싱 로직 개선
+        current_year = datetime.now().year
+        party_time = None
+        for year_offset in [0, 1]: # 현재 연도, 다음 연도 시도
             try:
-                party_time = datetime.strptime(f"{current_year}-{date} {time}", "%Y-%m/%d %H:%M")
+                party_time = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
+                if party_time < datetime.now() and year_offset == 0:
+                    continue
+                break
             except ValueError:
-                try:
-                    party_time = datetime.strptime(f"{current_year + 1}-{date} {time}", "%Y-%m/%d %H:%M")
-                except ValueError:
-                    raise ValueError("날짜/시간 형식이 올바르지 않습니다.")
+                continue
+        
+        if not party_time:
+            raise ValueError("날짜/시간 형식이 올바르지 않거나 유효하지 않은 날짜입니다. (예: 7/6 20:00)")
 
         reminder_time = party_time - timedelta(minutes=30)
 
     except asyncio.TimeoutError:
         await ctx.send("⏰ 시간 초과로 파티 생성이 취소되었습니다.")
         return
-    except ValueError as e: 
+    except ValueError as e:
         await ctx.send(f"⚠️ {e}")
         return
     except Exception as e:
@@ -344,13 +403,13 @@ async def 모집(ctx):
     thread = await ctx.channel.create_thread(
         name=f"{ctx.author.display_name}님의 파티 모집",
         type=discord.ChannelType.public_thread,
-        auto_archive_duration=60, 
+        auto_archive_duration=60,
     )
 
     party_info = {
         "dungeon": dungeon,
-        "date": date,
-        "time": time,
+        "date": date_str,
+        "time": time_str,
         "reminder_time": reminder_time.timestamp(),
         "participants": {},
         "embed_msg_id": None,
@@ -361,7 +420,7 @@ async def 모집(ctx):
     save_state()
 
     initial = (
-        f"📍 던전: **{dungeon}**\n📅 날짜: **{date}**\n⏰ 시간: **{time}**\n\n"
+        f"📍 던전: **{dungeon}**\n📅 날짜: **{date_str}**\n⏰ 시간: **{time_str}**\n\n"
         "**🧑‍🤝‍🧑 현재 참여자 명단:**\n(아직 없음)\n\n"
         "🔔 참여자에게 시작 30분 전에 알림이 전송됩니다!\n"
         "👇 아래 셀렉트 메뉴에서 역할을 선택해 파티에 참여하세요! 최대 8명 + 예비 인원 허용."
@@ -467,13 +526,13 @@ async def mbti통계(ctx):
 @bot.command()
 async def mbti확인(ctx, mbti_type: str):
     """특정 MBTI 역할을 가진 멤버 목록을 보여줍니다. (예: !mbti확인 ENFP)"""
-    mbti_type = mbti_type.upper() 
+    mbti_type = mbti_type.upper()
 
-    if mbti_type not in MBTI_ROLE_NAMES: 
+    if mbti_type not in MBTI_ROLE_NAMES:
         await ctx.send(f"⚠️ '{mbti_type}'는 유효한 MBTI 역할이 아닙니다. 정확한 MBTI 유형을 입력해주세요. (예: ISTJ, ENFP)")
         return
 
-    role_id = ROLE_IDS["MBTI"].get(mbti_type) 
+    role_id = ROLE_IDS["MBTI"].get(mbti_type)
     if not role_id:
         await ctx.send(f"'{mbti_type}' 역할 ID를 `ROLE_IDS['MBTI']`에서 찾을 수 없습니다. 설정을 확인해주세요.")
         return
@@ -495,7 +554,7 @@ async def mbti확인(ctx, mbti_type: str):
 
     if members_with_role:
         description_text = "\n".join(members_with_role)
-        if len(description_text) > 1900: 
+        if len(description_text) > 1900:
             description_text = description_text[:1900] + "\n...(이하 생략)"
         embed.description = description_text
         embed.set_footer(text=f"총 {len(members_with_role)}명")
@@ -513,7 +572,7 @@ async def show_help(ctx):
     embed = discord.Embed(
         title="✨ 찡긋봇 명령어 도움말 ✨",
         description="찡긋봇이 제공하는 명령어는 다음과 같습니다:",
-        color=0x7289DA 
+        color=0x7289DA
     )
 
     embed.add_field(
@@ -531,7 +590,7 @@ async def show_help(ctx):
     
     embed.add_field(
         name="📌 역할 선택 및 인증",
-        value="역할 선택은 `#역할-선택` 채널에서, 인증은 `#인증` 채널에서 버튼을 통해 진행할 수 있습니다.",
+        value="역할 선택은 <#{ROLE_SELECT_CHANNEL_ID}> 채널에서, 인증은 <#{VERIFY_CHANNEL_ID}> 채널에서 버튼을 통해 진행할 수 있습니다.",
         inline=False
     )
 
@@ -542,38 +601,93 @@ async def show_help(ctx):
 
 
 # === 리마인더 루프 ===
+@tasks.loop(minutes=1) # 1분마다 실행되도록 변경
 async def reminder_loop():
-    await bot.wait_until_ready()
-    while not bot.is_closed():
-        now = datetime.now().timestamp()
-        for thread_id_str, info in list(state["party_infos"].items()):
-            reminder_time = info.get("reminder_time")
-            if reminder_time and now >= reminder_time:
-                guild = bot.get_guild(YOUR_GUILD_ID)
-                if not guild: 
-                    print(f"경고: 길드 ID {YOUR_GUILD_ID}를 찾을 수 없습니다. (리마인더 루프)")
-                    continue
+    await bot.wait_until_ready() # 봇이 준비될 때까지 대기
+    # print("리마인더 루프 실행 중...") # 너무 많이 출력될 수 있어 주석 처리
 
-                mentions = []
-                for user_id_str in info.get("participants", {}).keys():
-                    member = guild.get_member(int(user_id_str))
-                    if member:
-                        mentions.append(member.mention)
-                
-                thread = bot.get_channel(int(thread_id_str))
-                if thread:
-                    try:
-                        await thread.send(
-                            f"⏰ **리마인더 알림!**\n{' '.join(mentions)}\n"
-                            f"`{info['dungeon']}` 던전이 30분 후에 시작됩니다!"
-                        )
-                        info["reminder_time"] = None
-                        save_state()
-                    except Exception as e:
-                        print(f"리마인더 전송 실패 (스레드 {thread_id_str}): {e}")
-                else:
-                    print(f"경고: 스레드 ID {thread_id_str}를 찾을 수 없습니다. (리마인더 루프)")
-        await asyncio.sleep(60)
+    now = datetime.now()
+    
+    # dictionary를 복사하여 반복 중 수정 오류 방지
+    for thread_id_str, info in list(state["party_infos"].items()):
+        reminder_timestamp = info.get("reminder_time")
+        
+        if reminder_timestamp is None:
+            continue # 이미 알림이 전송되었거나, 리마인더 시간이 설정되지 않은 경우
+
+        reminder_dt = datetime.fromtimestamp(reminder_timestamp)
+
+        # 현재 시간과 리마인더 시간의 차이를 계산
+        time_until_reminder = reminder_dt - now
+        
+        # 리마인더가 발동해야 할 시간 (예: 30분 전)과 현재 시간이 근접한지 확인
+        # 0분 ~ 1분 사이 (1분 이내)로 설정하여 정확도를 높임
+        if timedelta(minutes=0) <= time_until_reminder <= timedelta(minutes=1):
+            guild = bot.get_guild(YOUR_GUILD_ID)
+            if not guild:
+                print(f"경고: 길드 ID {YOUR_GUILD_ID}를 찾을 수 없습니다. (리마인더 루프)")
+                continue
+
+            mentions = []
+            for user_id_str in info.get("participants", {}).keys():
+                member = guild.get_member(int(user_id_str))
+                if member:
+                    mentions.append(member.mention)
+            
+            thread = bot.get_channel(int(thread_id_str))
+            if thread:
+                try:
+                    await thread.send(
+                        f"⏰ **리마인더 알림!**\n{' '.join(mentions)}\n"
+                        f"`{info['dungeon']}` 던전이 30분 후에 시작됩니다! **({info['date']} {info['time']})**"
+                    )
+                    # 알림을 보냈으니 reminder_time을 제거하거나, 이미 보낸 시간을 기록
+                    info["reminder_time"] = None # 다시 알림이 울리지 않도록 None으로 설정
+                    save_state()
+                    print(f"리마인더 전송 완료: 스레드 {thread_id_str} - {info['dungeon']}")
+                except Exception as e:
+                    print(f"리마인더 전송 실패 (스레드 {thread_id_str}): {e}")
+            else:
+                print(f"경고: 스레드 ID {thread_id_str}를 찾을 수 없습니다. (리마인더 루프)")
+        
+        # 과거 시간인데 리마인더가 아직 남아있는 경우 (봇 재시작 등으로 놓쳤을 경우)
+        elif reminder_dt < now and reminder_timestamp is not None:
+            # 리마인더 시간을 None으로 설정하여 다시 알림이 울리지 않도록 함
+            info["reminder_time"] = None
+            save_state()
+            # print(f"과거 리마인더 시간 발견 및 처리 (스레드 {thread_id_str}): {info['dungeon']}") # 너무 많이 출력될 수 있어 주석 처리
+
+
+# === 새 멤버가 서버에 들어올 때 작동하는 함수 추가 ===
+@bot.event
+async def on_member_join(member):
+    guild = member.guild
+    if guild.id == YOUR_GUILD_ID: # 봇이 설정된 길드인지 확인
+        guest_role = guild.get_role(GUEST_ROLE_ID)
+        if guest_role:
+            await member.add_roles(guest_role)
+            print(f"✅ {member.display_name} 님에게 '손님' 역할 부여 완료.")
+        else:
+            print(f"⚠️ '손님' 역할 (ID: {GUEST_ROLE_ID})을 찾을 수 없습니다. 역할 ID를 확인해주세요.")
+
+        welcome_channel = guild.get_channel(WELCOME_CHANNEL_ID)
+        if welcome_channel:
+            # Welcome 메시지 구성 (인증 및 역할 선택 채널 멘션 포함)
+            welcome_message = (
+                f"{member.mention} 님, 찡긋 길드 디스코드 서버에 오신 것을 환영합니다! ✨\n\n"
+                f"저희 서버는 **인증**을 해야 모든 채널을 이용할 수 있습니다. 🧐\n"
+                f"현재는 **손님** 역할이 부여되어 일부 채널만 볼 수 있어요.\n\n"
+                f"1. 먼저 <#{VERIFY_CHANNEL_ID}> 채널로 이동하여 **`인증하죠`** 버튼을 눌러 **`찡긋`** 멤버가 되어주세요! 🪪\n"
+                f"2. 인증 완료 후 <#{ROLE_SELECT_CHANNEL_ID}> 채널에서 **아르카나 및 MBTI 역할**을 선택해주세요! 🎭\n\n"
+                "즐거운 시간 되세요! 😄"
+            )
+            await welcome_channel.send(welcome_message)
+            print(f"✅ {member.display_name} 님께 환영 메시지 전송 완료. (채널: {welcome_channel.name})")
+        else:
+            print(f"⚠️ 환영 메시지를 보낼 채널 (ID: {WELCOME_CHANNEL_ID})을 찾을 수 없습니다. 채널 ID를 확인해주세요.")
+    else:
+        print(f"⚠️ 봇이 설정된 길드 ({YOUR_GUILD_ID})가 아닌 다른 길드에 멤버가 조인했습니다.")
+
 
 # === 봇 실행 시 초기화 ===
 @bot.event
@@ -587,30 +701,32 @@ async def on_ready():
         except Exception as e:
             print(f"닉네임 변경 실패: {e}")
 
+        # 모든 persistent view를 재등록
+        bot.add_view(CategorySelectView())
+        bot.add_view(VerifyView())
+        bot.add_view(PartyView())
+
+        # 역할 선택 메시지 확인 및 재전송
         role_channel = guild.get_channel(ROLE_SELECT_CHANNEL_ID)
         if role_channel:
-            bot.add_view(CategorySelectView()) 
-            bot.add_view(VerifyView()) 
-            bot.add_view(PartyView()) 
-
             if state["initial_message_id"]:
                 try:
                     initial_msg = await role_channel.fetch_message(state["initial_message_id"])
-                    await initial_msg.edit(view=CategorySelectView()) 
+                    await initial_msg.edit(view=CategorySelectView())
                     print(f"✅ 기존 역할 선택 초기 메시지 ({state['initial_message_id']})에 뷰 재등록 완료.")
                 except discord.NotFound:
                     print(f"⚠️ 저장된 역할 선택 초기 메시지 ({state['initial_message_id']})를 찾을 수 없습니다. 새로 전송합니다.")
-                    state["initial_message_id"] = None 
+                    state["initial_message_id"] = None
                     save_state()
                 except Exception as e:
                     print(f"역할 선택 초기 메시지 확인 중 오류 발생: {e}")
-                    state["initial_message_id"] = None 
+                    state["initial_message_id"] = None
                     save_state()
 
             if not state["initial_message_id"]:
                 try:
                     msg = await role_channel.send(
-                        "👇 아래 버튼을 눌러 `아르카나` 또는 `MBTI` 역할을 선택하세요!", 
+                        "👇 아래 버튼을 눌러 `아르카나` 또는 `MBTI` 역할을 선택하세요!",
                         view=CategorySelectView()
                     )
                     state["initial_message_id"] = msg.id
@@ -619,11 +735,12 @@ async def on_ready():
                 except Exception as e:
                     print(f"역할 선택 초기 메시지 전송 오류: {e}")
 
+        # 인증 메시지 확인 및 재전송
         verify_channel = guild.get_channel(VERIFY_CHANNEL_ID)
         if verify_channel:
             try:
                 found_existing_verify_msg = False
-                async for msg_history in verify_channel.history(limit=5):
+                async for msg_history in verify_channel.history(limit=5): # 최근 5개 메시지 확인
                     if msg_history.author == bot.user and "✅ 서버에 오신 걸 환영합니다!" in msg_history.content:
                         found_existing_verify_msg = True
                         print("✅ 기존 인증 메시지 발견. 뷰 재등록 시도.")
@@ -643,31 +760,21 @@ async def on_ready():
             except Exception as e:
                 print(f"인증 메시지 전송 오류: {e}")
 
-    bot.loop.create_task(reminder_loop())
+        # 파티 모집 스레드의 뷰도 재등록 (봇 재시작 시 필요)
+        for thread_id_str, info in list(state["party_infos"].items()):
+            if info.get("embed_msg_id"):
+                thread_channel = guild.get_channel(int(thread_id_str))
+                if thread_channel:
+                    try:
+                        # 파티 뷰는 스레드 생성 시 보내지므로, 재시작 시 별도 재등록 로직은 불필요하지만,
+                        # 혹시 모를 상황에 대비하여 View 객체 자체는 add_view로 등록해두는 것이 안전
+                        print(f"PartyView for thread {thread_id_str} registered.")
+                    except Exception as e:
+                        print(f"파티 스레드 뷰 재등록 중 오류 발생: {e}")
 
-# === 새 멤버가 서버에 들어올 때 작동하는 함수 추가 ===
-@bot.event
-async def on_member_join(member):
-    guild = member.guild
-    if guild.id == YOUR_GUILD_ID: # 봇이 설정된 길드인지 확인
-        welcome_channel = guild.get_channel(WELCOME_CHANNEL_ID)
-        if welcome_channel:
-            # Welcome 메시지 구성 (인증 및 역할 선택 채널 멘션 포함)
-            welcome_message = (
-                f"{member.mention} 님, 찡긋 길드 디스코드 서버에 오신 것을 환영합니다!\n\n"
-                f"저희 서버는 **인증**을 해야 모든 채널을 이용할 수 있습니다. 🧐\n\n"
-                f"1. 먼저 <#{VERIFY_CHANNEL_ID}> 채널로 이동하여 **`인증하죠`** 버튼을 눌러주세요!\n"
-                f"2. 인증 완료 후 <#{ROLE_SELECT_CHANNEL_ID}> 채널에서 **아르카나 및 MBTI 역할**을 선택해주세요!\n\n"
-                "즐거운 시간 되세요! 😄"
-            )
-            await welcome_channel.send(welcome_message)
-            print(f"✅ {member.display_name} 님께 환영 메시지 전송 완료. (채널: {welcome_channel.name})")
-        else:
-            print(f"⚠️ 환영 메시지를 보낼 채널 (ID: {WELCOME_CHANNEL_ID})을 찾을 수 없습니다. 채널 ID를 확인해주세요.")
-    else:
-        print(f"⚠️ 봇이 설정된 길드 ({YOUR_GUILD_ID})가 아닌 다른 길드에 멤버가 조인했습니다.")
-
+    # 리마인더 루프 시작
+    reminder_loop.start() # @tasks.loop를 사용하므로 .start() 호출
 
 # === 시작 ===
-load_state() 
+load_state()
 bot.run(TOKEN)
