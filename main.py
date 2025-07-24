@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone # timezone import 추가
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands, tasks
@@ -21,9 +21,9 @@ else:
 YOUR_GUILD_ID = 1388092210519605361
 ROLE_SELECT_CHANNEL_ID = 1388211020576587786
 VERIFY_CHANNEL_ID = 1391373955507552296    # 인증 버튼 메시지를 보낼 채널
-VERIFIED_ROLE_ID = 1390356825454416094      # 인증 완료 역할 (이 역할이 '찡긋' 역할이 됩니다)
+VERIFIED_ROLE_ID = 1390356825454416094     # 인증 완료 역할 (이 역할이 '찡긋' 역할이 됩니다)
 GUEST_ROLE_ID = 1393038834106892379      # '손님' 역할 ID (Discord에서 생성 후 여기에 붙여넣으세요!)
-VERIFY_LOG_CHANNEL_ID = 1391756822763012190     # 인증 로그 채널
+VERIFY_LOG_CHANNEL_ID = 1391756822763012190      # 인증 로그 채널
 WELCOME_CHANNEL_ID = 1390643886656847983 # "반갑죠채널"의 실제 채널 ID
 
 # --- 인증 질문/답변 설정 ---
@@ -69,9 +69,11 @@ ALL_ROLE_NAMES = {k: v for category in ROLE_IDS.values() for k, v in category.it
 # MBTI 역할 이름만 따로 리스트로 정의 (통계 계산 및 단일 선택 처리 시 유용)
 MBTI_ROLE_NAMES = list(ROLE_IDS["MBTI"].keys())
 
-
 DATA_FILE = "data.json"
 state = {"role_message_id": None, "party_infos": {}, "initial_message_id": None}
+
+# KST 시간대 정의 (UTC+9)
+KST = timezone(timedelta(hours=9))
 
 # === 상태 로드 및 저장 ===
 def save_state():
@@ -310,26 +312,33 @@ class PartyEditButton(Button):
             date_str = content_parts[1]
             time_str = content_parts[2]
 
-            # 파티 시간 파싱 로직 개선
+            # 파티 시간 파싱 및 UTC 변환 로직 (KST 기준)
             current_year = datetime.now().year
-            party_time = None
-            for year_offset in [0, 1]: # 현재 연도, 다음 연도 시도
+            party_time_utc = None
+            for year_offset in [0, 1]:
                 try:
-                    # '월/일' 형식을 위해 strptime 형식 변경
-                    party_time = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
-                    # 만약 파싱된 시간이 현재보다 과거라면 다음 연도를 시도 (단, 1년 이상 과거는 아님)
-                    if party_time < datetime.now() and year_offset == 0:
-                        continue # 다음 연도로 다시 시도
-                    break # 성공적으로 파싱했으면 루프 종료
+                    parsed_dt = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
+                    party_time_kst = parsed_dt.replace(tzinfo=KST)
+                    party_time_utc = party_time_kst.astimezone(timezone.utc)
+                    
+                    if party_time_utc < datetime.now(timezone.utc) and year_offset == 0:
+                        continue
+                    break
                 except ValueError:
-                    continue # 파싱 실패 시 다음 연도 시도
+                    continue
             
-            if not party_time:
+            if not party_time_utc:
                 raise ValueError("날짜/시간 형식이 올바르지 않거나 유효하지 않은 날짜입니다. (예: 7/10 20:30)")
 
-            reminder_time = party_time - timedelta(minutes=30)
+            # 알림 시간 (10분 전으로 변경)
+            reminder_time_utc = party_time_utc - timedelta(minutes=10)
 
-            info.update({"dungeon": dungeon, "date": date_str, "time": time_str, "reminder_time": reminder_time.timestamp()})
+            info.update({
+                "dungeon": dungeon, 
+                "date": date_str, 
+                "time": time_str, 
+                "reminder_time": reminder_time_utc.timestamp() # UTC 타임스탬프 저장
+            })
             save_state()
             await update_party_embed(thread_id)
             await interaction.followup.send("✅ 파티 정보가 성공적으로 수정되었습니다!", ephemeral=True)
@@ -373,22 +382,26 @@ async def 모집(ctx):
         date_str = content_parts[1]
         time_str = content_parts[2]
 
-        # 파티 시간 파싱 로직 개선
+        # 파티 시간 파싱 및 UTC 변환 로직 (KST 기준)
         current_year = datetime.now().year
-        party_time = None
+        party_time_utc = None
         for year_offset in [0, 1]: # 현재 연도, 다음 연도 시도
             try:
-                party_time = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
-                if party_time < datetime.now() and year_offset == 0:
+                parsed_dt = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
+                party_time_kst = parsed_dt.replace(tzinfo=KST)
+                party_time_utc = party_time_kst.astimezone(timezone.utc)
+                
+                if party_time_utc < datetime.now(timezone.utc) and year_offset == 0:
                     continue
                 break
             except ValueError:
                 continue
         
-        if not party_time:
+        if not party_time_utc:
             raise ValueError("날짜/시간 형식이 올바르지 않거나 유효하지 않은 날짜입니다. (예: 7/6 20:00)")
 
-        reminder_time = party_time - timedelta(minutes=30)
+        # 알림 시간 (10분 전으로 변경)
+        reminder_time_utc = party_time_utc - timedelta(minutes=10)
 
     except asyncio.TimeoutError:
         await ctx.send("⏰ 시간 초과로 파티 생성이 취소되었습니다.")
@@ -410,7 +423,7 @@ async def 모집(ctx):
         "dungeon": dungeon,
         "date": date_str,
         "time": time_str,
-        "reminder_time": reminder_time.timestamp(),
+        "reminder_time": reminder_time_utc.timestamp(), # UTC 타임스탬프 저장
         "participants": {},
         "embed_msg_id": None,
         "owner_id": ctx.author.id,
@@ -422,7 +435,7 @@ async def 모집(ctx):
     initial = (
         f"📍 던전: **{dungeon}**\n📅 날짜: **{date_str}**\n⏰ 시간: **{time_str}**\n\n"
         "**🧑‍🤝‍🧑 현재 참여자 명단:**\n(아직 없음)\n\n"
-        "🔔 참여자에게 시작 30분 전에 알림이 전송됩니다!\n"
+        "🔔 참여자에게 시작 10분 전에 알림이 전송됩니다!\n" # 10분 전으로 변경
         "👇 아래 셀렉트 메뉴에서 역할을 선택해 파티에 참여하세요! 최대 8명 + 예비 인원 허용."
     )
     embed = discord.Embed(title="🎯 파티 모집중!", description=initial, color=0x00ff00)
@@ -590,7 +603,7 @@ async def show_help(ctx):
     
     embed.add_field(
         name="📌 역할 선택 및 인증",
-        value="역할 선택은 <#{ROLE_SELECT_CHANNEL_ID}> 채널에서, 인증은 <#{VERIFY_CHANNEL_ID}> 채널에서 버튼을 통해 진행할 수 있습니다.",
+        value=f"역할 선택은 <#{ROLE_SELECT_CHANNEL_ID}> 채널에서, 인증은 <#{VERIFY_CHANNEL_ID}> 채널에서 버튼을 통해 진행할 수 있습니다.",
         inline=False
     )
 
@@ -606,7 +619,7 @@ async def reminder_loop():
     await bot.wait_until_ready() # 봇이 준비될 때까지 대기
     # print("리마인더 루프 실행 중...") # 너무 많이 출력될 수 있어 주석 처리
 
-    now = datetime.now()
+    now_utc = datetime.now(timezone.utc) # 현재 시간을 UTC aware 객체로 가져옴
     
     # dictionary를 복사하여 반복 중 수정 오류 방지
     for thread_id_str, info in list(state["party_infos"].items()):
@@ -615,12 +628,13 @@ async def reminder_loop():
         if reminder_timestamp is None:
             continue # 이미 알림이 전송되었거나, 리마인더 시간이 설정되지 않은 경우
 
-        reminder_dt = datetime.fromtimestamp(reminder_timestamp)
+        # 저장된 UTC 타임스탬프를 UTC aware datetime 객체로 변환
+        reminder_dt_utc = datetime.fromtimestamp(reminder_timestamp, tz=timezone.utc)
 
-        # 현재 시간과 리마인더 시간의 차이를 계산
-        time_until_reminder = reminder_dt - now
+        # 현재 UTC 시간과 알림 UTC 시간의 차이 계산
+        time_until_reminder = reminder_dt_utc - now_utc
         
-        # 리마인더가 발동해야 할 시간 (예: 30분 전)과 현재 시간이 근접한지 확인
+        # 리마인더가 발동해야 할 시간 (예: 10분 전)과 현재 시간이 근접한지 확인
         # 0분 ~ 1분 사이 (1분 이내)로 설정하여 정확도를 높임
         if timedelta(minutes=0) <= time_until_reminder <= timedelta(minutes=1):
             guild = bot.get_guild(YOUR_GUILD_ID)
@@ -639,7 +653,7 @@ async def reminder_loop():
                 try:
                     await thread.send(
                         f"⏰ **리마인더 알림!**\n{' '.join(mentions)}\n"
-                        f"`{info['dungeon']}` 던전이 30분 후에 시작됩니다! **({info['date']} {info['time']})**"
+                        f"`{info['dungeon']}` 던전이 10분 후에 시작됩니다! **({info['date']} {info['time']})**" # 10분 후로 메시지 변경
                     )
                     # 알림을 보냈으니 reminder_time을 제거하거나, 이미 보낸 시간을 기록
                     info["reminder_time"] = None # 다시 알림이 울리지 않도록 None으로 설정
@@ -651,7 +665,7 @@ async def reminder_loop():
                 print(f"경고: 스레드 ID {thread_id_str}를 찾을 수 없습니다. (리마인더 루프)")
         
         # 과거 시간인데 리마인더가 아직 남아있는 경우 (봇 재시작 등으로 놓쳤을 경우)
-        elif reminder_dt < now and reminder_timestamp is not None:
+        elif reminder_dt_utc < now_utc and reminder_timestamp is not None:
             # 리마인더 시간을 None으로 설정하여 다시 알림이 울리지 않도록 함
             info["reminder_time"] = None
             save_state()
