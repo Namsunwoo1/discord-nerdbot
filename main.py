@@ -539,17 +539,17 @@ async def 모집(ctx):
     # '찡긋' 역할 확인
     verified_role = ctx.guild.get_role(VERIFIED_ROLE_ID)
     if not verified_role or verified_role not in ctx.author.roles:
-        await ctx.send("⛔ 파티 모집은 `찡긋` 역할을 가진 멤버만 가능합니다. 먼저 인증을 완료해주세요!")
+        await ctx.send("⛔ 파티 모집은 `찡긋` 역할을 가진 멤버만 가능합니다. 먼저 인증을 완료해주세요!", delete_after=10) # 10초 후 자동 삭제
         return
 
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
-    await ctx.reply("📥 파티 정보를 한 줄로 입력해주세요. 예: `브리레흐1-3관 7/6 20:00`")
+    await ctx.send("📥 파티 정보를 한 줄로 입력해주세요. 예: `브리레흐1-3관 7/6 20:00`", delete_after=15) # 15초 후 자동 삭제
     
     try:
         msg = await bot.wait_for("message", timeout=30.0, check=check)
         content_parts = msg.content.strip().split()
         if len(content_parts) < 3:
-            await ctx.reply("⚠️ 입력 형식이 올바르지 않습니다. (예: `던전명 7/6 20:00`)")
+            await ctx.send("⚠️ 입력 형식이 올바르지 않습니다. (예: `던전명 7/6 20:00`)", delete_after=10) # 10초 후 자동 삭제
             return
 
         dungeon = content_parts[0]
@@ -577,21 +577,33 @@ async def 모집(ctx):
         reminder_time_utc = party_time_utc - timedelta(minutes=10) # 10분 전 알림
 
     except asyncio.TimeoutError:
-        await ctx.reply("⏰ 시간 초과로 파티 생성이 취소되었습니다.")
+        await ctx.send("⏰ 시간 초과로 파티 생성이 취소되었습니다.", delete_after=10) # 10초 후 자동 삭제
         return
     except ValueError as e:
-        await ctx.reply(f"⚠️ {e}")
+        await ctx.send(f"⚠️ {e}", delete_after=10) # 10초 후 자동 삭제
         return
     except Exception as e:
-        await ctx.reply(f"⚠️ 파티 정보 입력 중 오류 발생: {e}")
+        await ctx.send(f"⚠️ 파티 정보 입력 중 오류 발생: {e}", delete_after=10) # 10초 후 자동 삭제
         return
 
     # 스레드 이름 변경: [던전명] 날짜 시간 - 모집자닉네임님의 파티 모집
-    thread = await ctx.channel.create_thread(
-        name=f"[{dungeon}] {date_str} {time_str} - {ctx.author.display_name}님의 파티 모집",
-        type=discord.ChannelType.public_thread,
-        auto_archive_duration=60, # 기본 60분 (1시간) 자동 보관 설정
-    )
+    # 스레드 생성 시도 (권한 부족에 대한 예외 처리 추가)
+    thread = None
+    try:
+        thread = await ctx.channel.create_thread(
+            name=f"[{dungeon}] {date_str} {time_str} - {ctx.author.display_name}님의 파티 모집",
+            type=discord.ChannelType.public_thread,
+            auto_archive_duration=60, # 기본 60분 (1시간) 자동 보관 설정
+        )
+        print(f"DEBUG: 스레드 '{thread.name}' (ID: {thread.id}) 생성 성공.")
+    except discord.Forbidden:
+        await ctx.send("❌ 스레드를 생성할 권한이 없습니다. 봇의 권한을 확인해주세요.", delete_after=15)
+        print(f"ERROR: 길드 '{ctx.guild.name}'에서 스레드 생성 권한 부족.")
+        return # 권한이 없으므로 여기서 함수 종료
+    except Exception as e:
+        await ctx.send(f"❌ 스레드 생성 중 오류 발생: {e}", delete_after=15)
+        print(f"ERROR: 스레드 생성 중 예상치 못한 오류 발생: {e}")
+        return # 오류 발생 시 함수 종료
 
     # 파티 정보 딕셔너리 생성 및 저장
     party_info = {
@@ -637,6 +649,7 @@ async def 모집(ctx):
 
 
 ## MBTI 통계 및 확인 기능
+
 
 @bot.command()
 async def mbti통계(ctx):
@@ -797,7 +810,7 @@ async def reminder_loop():
         # --- 스레드 자동 보관 로직 끝 ---
 
         # --- 기존 리마인더 알림 로직 ---
-        # 이 부분이 수정되었습니다. reminder_dt_utc는 이미 datetime 객체입니다.
+        # reminder_dt_utc는 load_state에서 이미 datetime 객체로 변환되어 저장됨
         reminder_dt_utc = info.get("reminder_time") 
         
         if reminder_dt_utc is None: # 이미 알림을 보냈거나 설정되지 않은 경우
