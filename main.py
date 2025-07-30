@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from datetime import datetime, timedelta, timezone # timezone import 추가
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands, tasks
@@ -89,7 +89,7 @@ def load_state():
                 state = {
                     "role_message_id": loaded.get("role_message_id"),
                     "party_infos": loaded.get("party_infos", {}),
-                    "initial_message_id": loaded.get("initial_message_id") # 초기 메시지 ID 로드
+                    "initial_message_id": loaded.get("initial_message_id")
                 }
             except Exception as e:
                 print(f"state 로드 실패: {e}")
@@ -117,10 +117,10 @@ class RoleSelectButton(Button):
             label=role_name,
             style=discord.ButtonStyle.secondary,
             emoji=emoji,
-            custom_id=f"{role_type}_{role_name}_button" # 고유 custom_id 추가
+            custom_id=f"{role_type}_{role_name}_button"
         )
         self.role_name = role_name
-        self.role_type = role_type # "JOB" 또는 "MBTI"
+        self.role_type = role_type
 
     async def callback(self, interaction: discord.Interaction):
         role_id = ROLE_IDS[self.role_type].get(self.role_name)
@@ -140,7 +140,7 @@ class RoleSelectButton(Button):
             # MBTI 역할은 한 번에 하나만 가질 수 있도록 처리
             if self.role_type == "MBTI":
                 for existing_role in interaction.user.roles:
-                    if existing_role.name in MBTI_ROLE_NAMES: # MBTI 역할 이름 리스트를 사용하여 체크
+                    if existing_role.name in MBTI_ROLE_NAMES:
                         await interaction.user.remove_roles(existing_role)
                         break
             
@@ -182,7 +182,7 @@ class RoleButtonsView(View):
 
 class BackToCategoryButton(Button):
     """카테고리 선택 뷰로 돌아가는 버튼"""
-    def __init__(self, ):
+    def __init__(self):
         super().__init__(label="🔙 뒤로가기", style=discord.ButtonStyle.danger, row=4, custom_id="back_to_category_button")
     
     async def callback(self, interaction: discord.Interaction):
@@ -337,7 +337,7 @@ class PartyEditButton(Button):
                 "dungeon": dungeon, 
                 "date": date_str, 
                 "time": time_str, 
-                "reminder_time": reminder_time_utc.timestamp() # UTC 타임스탬프 저장
+                "reminder_time": reminder_time_utc.timestamp()
             })
             save_state()
             await update_party_embed(thread_id)
@@ -369,13 +369,14 @@ async def 모집(ctx):
         return
 
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
-    await ctx.send("📥 파티 정보를 한 줄로 입력해주세요. 예: `브리레흐1-3관 7/6 20:00`")
+    # 수정된 부분: ephemeral=True 추가
+    await ctx.reply("📥 파티 정보를 한 줄로 입력해주세요. 예: `브리레흐1-3관 7/6 20:00`", ephemeral=True)
     
     try:
         msg = await bot.wait_for("message", timeout=30.0, check=check)
         content_parts = msg.content.strip().split()
         if len(content_parts) < 3:
-            await ctx.send("⚠️ 입력 형식이 올바르지 않습니다. (예: `던전명 7/6 20:00`)")
+            await ctx.reply("⚠️ 입력 형식이 올바르지 않습니다. (예: `던전명 7/6 20:00`)", ephemeral=True)
             return
 
         dungeon = content_parts[0]
@@ -404,26 +405,27 @@ async def 모집(ctx):
         reminder_time_utc = party_time_utc - timedelta(minutes=10)
 
     except asyncio.TimeoutError:
-        await ctx.send("⏰ 시간 초과로 파티 생성이 취소되었습니다.")
+        await ctx.reply("⏰ 시간 초과로 파티 생성이 취소되었습니다.", ephemeral=True) # 수정된 부분
         return
     except ValueError as e:
-        await ctx.send(f"⚠️ {e}")
+        await ctx.reply(f"⚠️ {e}", ephemeral=True) # 수정된 부분
         return
     except Exception as e:
-        await ctx.send(f"⚠️ 파티 정보 입력 중 오류 발생: {e}")
+        await ctx.reply(f"⚠️ 파티 정보 입력 중 오류 발생: {e}", ephemeral=True) # 수정된 부분
         return
 
+    # 스레드 이름 변경: [던전명] 날짜 시간 - 모집자닉네임님의 파티 모집
     thread = await ctx.channel.create_thread(
-        name=f"{ctx.author.display_name}님의 파티 모집",
+        name=f"[{dungeon}] {date_str} {time_str} - {ctx.author.display_name}님의 파티 모집",
         type=discord.ChannelType.public_thread,
-        auto_archive_duration=60,
+        auto_archive_duration=60, # 기본 60분 (1시간) 자동 보관 설정
     )
 
     party_info = {
         "dungeon": dungeon,
         "date": date_str,
         "time": time_str,
-        "reminder_time": reminder_time_utc.timestamp(), # UTC 타임스탬프 저장
+        "reminder_time": reminder_time_utc.timestamp(),
         "participants": {},
         "embed_msg_id": None,
         "owner_id": ctx.author.id,
@@ -432,42 +434,60 @@ async def 모집(ctx):
     state["party_infos"][str(thread.id)] = party_info
     save_state()
 
-    initial = (
-        f"📍 던전: **{dungeon}**\n📅 날짜: **{date_str}**\n⏰ 시간: **{time_str}**\n\n"
-        "**🧑‍🤝‍🧑 현재 참여자 명단:**\n(아직 없음)\n\n"
-        "🔔 참여자에게 시작 10분 전에 알림이 전송됩니다!\n" # 10분 전으로 변경
-        "👇 아래 셀렉트 메뉴에서 역할을 선택해 파티에 참여하세요! 최대 8명 + 예비 인원 허용."
+    # 초기 임베드 메시지 생성 및 전송 (update_party_embed에서 최종 형태를 만드므로 여기서는 간략하게)
+    initial_embed = discord.Embed(
+        title=f"🎯 파티 모집중! - {dungeon}",
+        description=(
+            f"📍 던전: **{dungeon}**\n📅 날짜: **{date_str}**\n⏰ 시간: **{time_str}**\n\n"
+            "**🧑‍🤝‍🧑 현재 참여자: 0명**\n(아직 없음)\n\n"
+            "---"
+        ),
+        color=0x00ff00
     )
-    embed = discord.Embed(title="🎯 파티 모집중!", description=initial, color=0x00ff00)
-    embed_msg = await thread.send(embed=embed)
+    owner_member = ctx.guild.get_member(party_info['owner_id'])
+    if owner_member:
+        initial_embed.set_footer(text=f"모집자: {owner_member.display_name}", icon_url=owner_member.avatar.url if owner_member.avatar else discord.Embed.Empty)
+
+    embed_msg = await thread.send(embed=initial_embed)
     await embed_msg.pin()
     party_info["embed_msg_id"] = embed_msg.id
     save_state()
-    await thread.send(view=PartyView())
+    await thread.send(view=PartyView()) # 파티 참여/수정 버튼 뷰 전송
+    # 이 메시지는 모두에게 보이도록 유지
     await ctx.send(f"{ctx.author.mention}님, 파티 모집 스레드가 생성되었습니다: {thread.mention}")
+
 
 async def update_party_embed(thread_id):
     info = state["party_infos"].get(str(thread_id))
     if not info:
         return
 
+    guild = bot.get_guild(YOUR_GUILD_ID)
+    if not guild:
+        print(f"길드 ID {YOUR_GUILD_ID}를 찾을 수 없습니다.")
+        return
+
+    participants = info.get("participants", {})
+    
+    current_participants_count = len(participants)
+    
+    main, reserve = [], []
+    for idx, (user_id_str, role) in enumerate(participants.items()):
+        member = guild.get_member(int(user_id_str))
+        if not member:
+            # 멤버를 찾을 수 없으면 participant에서 제거 (선택 사항)
+            # del info["participants"][user_id_str]
+            continue
+        (main if idx < 8 else reserve).append((member, role))
+
     desc_lines = [
         f"📍 던전: **{info['dungeon']}**",
         f"📅 날짜: **{info['date']}**",
         f"⏰ 시간: **{info['time']}**",
         "",
-        "**🧑‍🤝‍🧑 현재 참여자 명단:**",
+        "---",
+        f"**🧑‍🤝‍🧑 현재 참여자: {current_participants_count}명**",
     ]
-
-    guild = bot.get_guild(YOUR_GUILD_ID)
-    participants = info.get("participants", {})
-    main, reserve = [], []
-    for idx, (user_id_str, role) in enumerate(participants.items()):
-        member = guild.get_member(int(user_id_str))
-        if not member:
-            continue
-        (main if idx < 8 else reserve).append((member, role))
-
     if main:
         desc_lines += [f"- {m.display_name}: {r}" for m, r in main]
     else:
@@ -477,14 +497,29 @@ async def update_party_embed(thread_id):
         desc_lines.append("\n**📄 예비 인원:**")
         desc_lines += [f"- {m.display_name}: {r}" for m, r in reserve]
 
-    embed = discord.Embed(title="🎯 파티 모집중!", description="\n".join(desc_lines), color=0x00ff00)
+    desc_lines.append("\n---")
+    desc_lines.append("🔔 참여자에게 시작 10분 전에 알림이 전송됩니다!")
+    desc_lines.append("👇 아래 셀렉트 메뉴에서 역할을 선택해 파티에 참여하세요! 최대 8명 + 예비 인원 허용.")
+
+    embed = discord.Embed(
+        title=f"🎯 파티 모집중! - {info['dungeon']}",
+        description="\n".join(desc_lines),
+        color=0x00ff00
+    )
+    
+    owner_member = guild.get_member(info['owner_id'])
+    if owner_member:
+        embed.set_footer(text=f"모집자: {owner_member.display_name}", icon_url=owner_member.avatar.url if owner_member.avatar else discord.Embed.Empty)
+
     channel = bot.get_channel(int(thread_id))
     if channel and info.get("embed_msg_id"):
         try:
             msg = await channel.fetch_message(info["embed_msg_id"])
             await msg.edit(embed=embed)
+        except discord.NotFound:
+            print(f"⚠️ 임베드 메시지 ({info['embed_msg_id']})를 찾을 수 없습니다. (스레드 {thread_id})")
         except Exception as e:
-            print(f"임베드 수정 실패 (스레드 {thread_id}): {e}")
+            print(f"❌ 임베드 수정 실패 (스레드 {thread_id}): {e}")
 
 # ---
 ## MBTI 통계 기능
@@ -614,29 +649,51 @@ async def show_help(ctx):
 
 
 # === 리마인더 루프 ===
-@tasks.loop(minutes=1) # 1분마다 실행되도록 변경
+@tasks.loop(minutes=1)
 async def reminder_loop():
-    await bot.wait_until_ready() # 봇이 준비될 때까지 대기
-    # print("리마인더 루프 실행 중...") # 너무 많이 출력될 수 있어 주석 처리
+    await bot.wait_until_ready()
+    now_utc = datetime.now(timezone.utc)
 
-    now_utc = datetime.now(timezone.utc) # 현재 시간을 UTC aware 객체로 가져옴
-    
     # dictionary를 복사하여 반복 중 수정 오류 방지
     for thread_id_str, info in list(state["party_infos"].items()):
+        thread = bot.get_channel(int(thread_id_str))
+
+        # --- 스레드 자동 보관 로직 추가 ---
+        if thread and isinstance(thread, discord.Thread):
+            # party_time을 UTC aware datetime 객체로 파싱
+            party_time_str = f"{datetime.now().year}-{info['date']} {info['time']}"
+            try:
+                # KST 기준으로 파싱 후 UTC로 변환
+                parsed_dt = datetime.strptime(party_time_str, "%Y-%m/%d %H:%M").replace(tzinfo=KST)
+                party_time_utc = parsed_dt.astimezone(timezone.utc)
+            except ValueError:
+                print(f"경고: 스레드 {thread_id_str}의 날짜/시간 형식 오류. 스레드 보관 로직 건너뛰기.")
+                party_time_utc = None # 오류 발생 시 None으로 설정하여 아래 로직에 영향 주지 않음
+
+            # 파티 시작 시간이 1시간 지났고, 아직 스레드가 활성화 상태라면 보관
+            if party_time_utc and not thread.archived and party_time_utc + timedelta(hours=1) < now_utc:
+                try:
+                    await thread.edit(archived=True, reason="파티 모집 시간 1시간 경과, 스레드 자동 보관")
+                    print(f"✅ 스레드 '{thread.name}' (ID: {thread_id_str}) 자동 보관 처리됨.")
+                    # 스레드 보관 후 파티 정보는 유지 (선택 사항: 필요 없으면 아래 주석 해제)
+                    # del state["party_infos"][thread_id_str]
+                    # save_state() # 상태 변경 시 저장
+                except discord.Forbidden:
+                    print(f"❌ 스레드 '{thread.name}' (ID: {thread_id_str}) 보관 권한이 없습니다. 봇 권한을 확인해주세요.")
+                except Exception as e:
+                    print(f"❌ 스레드 '{thread.name}' (ID: {thread_id_str}) 보관 중 오류 발생: {e}")
+        # --- 스레드 자동 보관 로직 끝 ---
+
+        # --- 기존 리마인더 알림 로직 ---
         reminder_timestamp = info.get("reminder_time")
         
         if reminder_timestamp is None:
-            continue # 이미 알림이 전송되었거나, 리마인더 시간이 설정되지 않은 경우
+            continue
 
-        # 저장된 UTC 타임스탬프를 UTC aware datetime 객체로 변환
         reminder_dt_utc = datetime.fromtimestamp(reminder_timestamp, tz=timezone.utc)
-
-        # 현재 UTC 시간과 알림 UTC 시간의 차이 계산
         time_until_reminder = reminder_dt_utc - now_utc
         
-        # 리마인더가 발동해야 할 시간 (예: 10분 전)과 현재 시간이 근접한지 확인
-        # 0분 ~ 1분 사이 (1분 이내)로 설정하여 정확도를 높임
-        if timedelta(minutes=0) <= time_until_reminder <= timedelta(minutes=1):
+        if timedelta(minutes=0) <= time_until_reminder < timedelta(minutes=1):
             guild = bot.get_guild(YOUR_GUILD_ID)
             if not guild:
                 print(f"경고: 길드 ID {YOUR_GUILD_ID}를 찾을 수 없습니다. (리마인더 루프)")
@@ -648,29 +705,25 @@ async def reminder_loop():
                 if member:
                     mentions.append(member.mention)
             
-            thread = bot.get_channel(int(thread_id_str))
-            if thread:
+            if thread: # 스레드가 존재할 경우에만 알림 발송
                 try:
                     await thread.send(
                         f"⏰ **리마인더 알림!**\n{' '.join(mentions)}\n"
-                        f"`{info['dungeon']}` 던전이 10분 후에 시작됩니다! **({info['date']} {info['time']})**" # 10분 후로 메시지 변경
+                        f"`{info['dungeon']}` 던전이 10분 후에 시작됩니다! **({info['date']} {info['time']})**"
                     )
-                    # 알림을 보냈으니 reminder_time을 제거하거나, 이미 보낸 시간을 기록
-                    info["reminder_time"] = None # 다시 알림이 울리지 않도록 None으로 설정
+                    info["reminder_time"] = None
                     save_state()
                     print(f"리마인더 전송 완료: 스레드 {thread_id_str} - {info['dungeon']}")
                 except Exception as e:
-                    print(f"리마인더 전송 실패 (스레드 {thread_id_str}): {e}")
+                    print(f"❌ 리마인더 전송 실패 (스레드 {thread_id_str}): {e}")
             else:
-                print(f"경고: 스레드 ID {thread_id_str}를 찾을 수 없습니다. (리마인더 루프)")
+                print(f"경고: 스레드 ID {thread_id_str}를 찾을 수 없습니다. 리마인더 알림을 보낼 수 없습니다.")
         
-        # 과거 시간인데 리마인더가 아직 남아있는 경우 (봇 재시작 등으로 놓쳤을 경우)
+        # 과거 시간인데 리마인더가 아직 남아있는 경우 처리 (봇 재시작 등으로 놓쳤을 경우)
         elif reminder_dt_utc < now_utc and reminder_timestamp is not None:
-            # 리마인더 시간을 None으로 설정하여 다시 알림이 울리지 않도록 함
             info["reminder_time"] = None
             save_state()
-            # print(f"과거 리마인더 시간 발견 및 처리 (스레드 {thread_id_str}): {info['dungeon']}") # 너무 많이 출력될 수 있어 주석 처리
-
+# ---
 
 # === 새 멤버가 서버에 들어올 때 작동하는 함수 추가 ===
 @bot.event
@@ -686,7 +739,6 @@ async def on_member_join(member):
 
         welcome_channel = guild.get_channel(WELCOME_CHANNEL_ID)
         if welcome_channel:
-            # Welcome 메시지 구성 (인증 및 역할 선택 채널 멘션 포함)
             welcome_message = (
                 f"{member.mention} 님, 찡긋 길드 디스코드 서버에 오신 것을 환영합니다! ✨\n\n"
                 f"저희 서버는 **인증**을 해야 모든 채널을 이용할 수 있습니다. 🧐\n"
@@ -715,10 +767,9 @@ async def on_ready():
         except Exception as e:
             print(f"닉네임 변경 실패: {e}")
 
-        # 모든 persistent view를 재등록
         bot.add_view(CategorySelectView())
         bot.add_view(VerifyView())
-        bot.add_view(PartyView())
+        bot.add_view(PartyView()) # PartyView도 재등록
 
         # 역할 선택 메시지 확인 및 재전송
         role_channel = guild.get_channel(ROLE_SELECT_CHANNEL_ID)
@@ -754,7 +805,7 @@ async def on_ready():
         if verify_channel:
             try:
                 found_existing_verify_msg = False
-                async for msg_history in verify_channel.history(limit=5): # 최근 5개 메시지 확인
+                async for msg_history in verify_channel.history(limit=5):
                     if msg_history.author == bot.user and "✅ 서버에 오신 걸 환영합니다!" in msg_history.content:
                         found_existing_verify_msg = True
                         print("✅ 기존 인증 메시지 발견. 뷰 재등록 시도.")
@@ -774,20 +825,17 @@ async def on_ready():
             except Exception as e:
                 print(f"인증 메시지 전송 오류: {e}")
 
-        # 파티 모집 스레드의 뷰도 재등록 (봇 재시작 시 필요)
+        # 파티 모집 스레드의 뷰는 스레드 생성 시에 전송되므로, 봇 재시작 시 별도 재등록 로직은 불필요.
+        # 하지만, PartyView 자체는 add_view로 등록되어야 합니다. (이미 on_ready 초반에 추가됨)
         for thread_id_str, info in list(state["party_infos"].items()):
+            # 각 스레드의 embed_msg_id가 있는 경우 update_party_embed를 한번 호출하여 최신화
             if info.get("embed_msg_id"):
-                thread_channel = guild.get_channel(int(thread_id_str))
-                if thread_channel:
-                    try:
-                        # 파티 뷰는 스레드 생성 시 보내지므로, 재시작 시 별도 재등록 로직은 불필요하지만,
-                        # 혹시 모를 상황에 대비하여 View 객체 자체는 add_view로 등록해두는 것이 안전
-                        print(f"PartyView for thread {thread_id_str} registered.")
-                    except Exception as e:
-                        print(f"파티 스레드 뷰 재등록 중 오류 발생: {e}")
+                await update_party_embed(int(thread_id_str))
+                print(f"✅ 스레드 {thread_id_str} 임베드 정보 최신화 완료.")
+
 
     # 리마인더 루프 시작
-    reminder_loop.start() # @tasks.loop를 사용하므로 .start() 호출
+    reminder_loop.start()
 
 # === 시작 ===
 load_state()
