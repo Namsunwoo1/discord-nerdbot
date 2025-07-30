@@ -26,7 +26,7 @@ VERIFY_CHANNEL_ID = 1391373955507552296
 VERIFIED_ROLE_ID = 1390356825454416094
 GUEST_ROLE_ID = 1393038834106892379
 VERIFY_LOG_CHANNEL_ID = 1391756822763012190
-WELCOME_CHANNEL_ID = 1390643886656847983
+WELCOME_CHANNEL_ID = 1390643886656847986 # 이전과 다를 수 있으니 다시 확인해주세요!
 
 # --- 인증 질문/답변 설정 ---
 VERIFY_QUESTION = "찡긋 디스코드 채널에 오신것을 환영합니다.\n안내받은 코드를 입력하세요.\n(코드가 없을 경우 승인이 불가합니다.)"
@@ -358,23 +358,24 @@ class PartyEditButton(Button):
             time_str = content_parts[2]
 
             # 파티 시간 파싱 및 UTC 변환 로직 (KST 기준)
-            current_year = datetime.now(KST).year # 현재 KST 시간대의 연도
+            current_year = datetime.now(KST).year
             party_time_utc = None
-            for year_offset in [0, 1]: # 현재 연도와 다음 연도까지 고려
-                try:
-                    parsed_dt = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
-                    party_time_kst = parsed_dt.replace(tzinfo=KST)
-                    party_time_utc = party_time_kst.astimezone(timezone.utc)
+            try:
+                # 사용자가 입력한 날짜와 시간을 KST 기준으로 파싱
+                parsed_dt_kst = KST.localize(datetime.strptime(f"{current_year}-{date_str} {time_str}", "%Y-%m/%d %H:%M"))
+                
+                # 만약 파싱된 시간이 현재 시간보다 과거라면 (지난 날짜라면), 다음 해로 자동 조정
+                if parsed_dt_kst < datetime.now(KST):
+                    parsed_dt_kst = KST.localize(datetime.strptime(f"{current_year + 1}-{date_str} {time_str}", "%Y-%m/%d %H:%M"))
                     
-                    # 이미 지난 시간이라면 다음 연도로 시도
-                    if party_time_utc < datetime.now(timezone.utc) and year_offset == 0:
-                        continue
-                    break # 유효한 시간을 찾았으면 루프 종료
-                except ValueError:
-                    continue # 파싱 실패 시 다음 연도로 시도
-
-            if not party_time_utc:
+                party_time_utc = parsed_dt_kst.astimezone(timezone.utc)
+                
+            except ValueError:
                 raise ValueError("날짜/시간 형식이 올바르지 않거나 유효하지 않은 날짜입니다. (예: 7/10 20:30)")
+            
+            if not party_time_utc:
+                raise ValueError("파티 시간 설정에 실패했습니다. 형식과 날짜를 다시 확인해주세요.")
+
 
             # 알림 시간 (파티 시작 10분 전)
             reminder_time_utc = party_time_utc - timedelta(minutes=10)
@@ -539,7 +540,7 @@ async def 모집(ctx):
     # '찡긋' 역할 확인
     verified_role = ctx.guild.get_role(VERIFIED_ROLE_ID)
     if not verified_role or verified_role not in ctx.author.roles:
-        await ctx.send("⛔ 파티 모집은 `찡긋` 역할을 가진 멤버만 가능합니다. 먼저 인증을 완료해주세요!", delete_after=10)
+        await ctx.send("⛔ 파티 모집은 `찡긋` 역할을 가진 멤버만 가능합니다. 먼저 인증을 완료해주세요!", delete_after=10) # 10초 후 자동 삭제
         return
 
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
@@ -550,7 +551,7 @@ async def 모집(ctx):
     try:
         msg = await bot.wait_for("message", timeout=30.0, check=check)
         
-        # --- 새로 추가할 부분 ---
+        # --- 사용자 메시지 및 봇 질문 메시지 삭제 ---
         try:
             # 사용자가 입력한 파티 정보 메시지 삭제
             await msg.delete()
@@ -560,35 +561,36 @@ async def 모집(ctx):
             print(f"❌ '{ctx.guild.name}' 길드에서 사용자 메시지 또는 봇 질문 메시지 삭제 권한이 없습니다.")
         except Exception as e:
             print(f"⚠️ 사용자 메시지/봇 질문 메시지 삭제 중 오류 발생: {e}")
-        # --- 새로 추가할 부분 끝 ---
+        # --- 삭제 끝 ---
 
         content_parts = msg.content.strip().split()
         if len(content_parts) < 3:
-            await ctx.send("⚠️ 입력 형식이 올바르지 않습니다. (예: `던전명 7/6 20:00`)", delete_after=10)
+            await ctx.send("⚠️ 입력 형식이 올바르지 않습니다. (예: `던전명 7/6 20:00`)", delete_after=10) # 10초 후 자동 삭제
             return
 
         dungeon = content_parts[0]
         date_str = content_parts[1]
         time_str = content_parts[2]
 
-        current_year = datetime.now(KST).year
+        current_year = datetime.now(KST).year # KST 기준 현재 연도
         party_time_utc = None
-        for year_offset in [0, 1]:
-            try:
-                parsed_dt = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
-                party_time_kst = parsed_dt.replace(tzinfo=KST)
-                party_time_utc = party_time_kst.astimezone(timezone.utc)
+        try:
+            # 사용자가 입력한 날짜와 시간을 KST 기준으로 파싱
+            parsed_dt_kst = KST.localize(datetime.strptime(f"{current_year}-{date_str} {time_str}", "%Y-%m/%d %H:%M"))
+            
+            # 만약 파싱된 시간이 현재 시간보다 과거라면 (지난 날짜라면), 다음 해로 자동 조정
+            if parsed_dt_kst < datetime.now(KST):
+                parsed_dt_kst = KST.localize(datetime.strptime(f"{current_year + 1}-{date_str} {time_str}", "%Y-%m/%d %H:%M"))
                 
-                if party_time_utc < datetime.now(timezone.utc) and year_offset == 0:
-                    continue
-                break
-            except ValueError:
-                continue
+            party_time_utc = parsed_dt_kst.astimezone(timezone.utc)
+            
+        except ValueError:
+            raise ValueError("날짜/시간 형식이 올바르지 않거나 유효하지 않은 날짜입니다. (예: 7/6 20:00)")
         
         if not party_time_utc:
-            raise ValueError("날짜/시간 형식이 올바르지 않거나 유효하지 않은 날짜입니다. (예: 7/6 20:00)")
+            raise ValueError("파티 시간 설정에 실패했습니다. 형식과 날짜를 다시 확인해주세요.")
 
-        reminder_time_utc = party_time_utc - timedelta(minutes=10)
+        reminder_time_utc = party_time_utc - timedelta(minutes=10) # 10분 전 알림
 
     except asyncio.TimeoutError:
         # 시간 초과 시 봇의 질문 메시지도 삭제
@@ -596,7 +598,7 @@ async def 모집(ctx):
             await bot_question_msg.delete()
         except Exception:
             pass # 이미 삭제되었거나 다른 오류 발생 시 무시
-        await ctx.send("⏰ 시간 초과로 파티 생성이 취소되었습니다.", delete_after=10)
+        await ctx.send("⏰ 시간 초과로 파티 생성이 취소되었습니다.", delete_after=10) # 10초 후 자동 삭제
         return
     except ValueError as e:
         # 오류 메시지 전송 후 봇의 질문 메시지 삭제
@@ -604,7 +606,7 @@ async def 모집(ctx):
             await bot_question_msg.delete()
         except Exception:
             pass
-        await ctx.send(f"⚠️ {e}", delete_after=10)
+        await ctx.send(f"⚠️ {e}", delete_after=10) # 10초 후 자동 삭제
         return
     except Exception as e:
         # 오류 메시지 전송 후 봇의 질문 메시지 삭제
@@ -612,7 +614,7 @@ async def 모집(ctx):
             await bot_question_msg.delete()
         except Exception:
             pass
-        await ctx.send(f"⚠️ 파티 정보 입력 중 오류 발생: {e}", delete_after=10)
+        await ctx.send(f"⚠️ 파티 정보 입력 중 오류 발생: {e}", delete_after=10) # 10초 후 자동 삭제
         return
 
     # 스레드 이름 변경: [던전명] 날짜 시간 - 모집자닉네임님의 파티 모집
@@ -817,20 +819,24 @@ async def reminder_loop():
     await bot.wait_until_ready() # 봇이 완전히 준비될 때까지 기다림
     now_utc = datetime.now(timezone.utc)
     print(f"DEBUG: Reminder loop started at {now_utc.isoformat()}")
+    
+    print(f"DEBUG: Current party_infos in state: {list(state['party_infos'].keys())}")
 
     for thread_id_str, info in list(state["party_infos"].items()):
         thread_id = int(thread_id_str)
+        print(f"DEBUG: Processing party for thread ID: {thread_id_str}")
+        
         thread = bot.get_channel(thread_id)
         
         # 스레드가 유효한지 먼저 확인
         if not thread or not isinstance(thread, discord.Thread):
-            print(f"DEBUG: 스레드 {thread_id}를 찾을 수 없거나 스레드 객체가 아닙니다. 파티 정보에서 제거합니다.")
+            print(f"DEBUG: 스레드 {thread_id}를 찾을 수 없거나 스레드 객체가 아닙니다. (type: {type(thread)}) 파티 정보에서 제거합니다.")
             if str(thread_id) in state["party_infos"]:
                 del state["party_infos"][str(thread_id)]
                 save_state()
             continue # 다음 파티 정보로 넘어감
 
-        # --- 스레드 자동 보관 로직 (기존과 동일) ---
+        # --- 스레드 자동 보관 로직 ---
         party_time_utc = info.get("party_time") 
 
         if party_time_utc: # party_time이 있을 때만 보관 로직 실행
@@ -899,7 +905,6 @@ async def reminder_loop():
             print(f"DEBUG: 스레드 {thread_id_str} - 리마인더 시간이 너무 오래 지났습니다. 초기화.")
             info["reminder_time"] = None
             save_state()
-
 
 
 ## 새 멤버 환영 및 인증 안내
