@@ -816,42 +816,53 @@ async def reminder_loop():
     """매 1분마다 파티 리마인더 알림을 확인하고 스레드를 자동 보관합니다."""
     await bot.wait_until_ready() # 봇이 완전히 준비될 때까지 기다림
     now_utc = datetime.now(timezone.utc)
+    print(f"DEBUG: Reminder loop started at {now_utc.isoformat()}")
 
-    # dictionary를 복사하여 반복 중 수정 오류 방지
     for thread_id_str, info in list(state["party_infos"].items()):
-        thread = bot.get_channel(int(thread_id_str))
+        thread_id = int(thread_id_str)
+        thread = bot.get_channel(thread_id)
+        
+        # 스레드가 유효한지 먼저 확인
+        if not thread or not isinstance(thread, discord.Thread):
+            print(f"DEBUG: 스레드 {thread_id}를 찾을 수 없거나 스레드 객체가 아닙니다. 파티 정보에서 제거합니다.")
+            if str(thread_id) in state["party_infos"]:
+                del state["party_infos"][str(thread_id)]
+                save_state()
+            continue # 다음 파티 정보로 넘어감
 
-        # --- 스레드 자동 보관 로직 ---
-        # party_time이 datetime 객체인지 확인 (load_state에서 변환했음)
+        # --- 스레드 자동 보관 로직 (기존과 동일) ---
         party_time_utc = info.get("party_time") 
 
-        if thread and isinstance(thread, discord.Thread) and party_time_utc:
+        if party_time_utc: # party_time이 있을 때만 보관 로직 실행
             # 파티 시작 시간이 1시간 지났고, 아직 스레드가 활성화 상태라면 보관
             if not thread.archived and party_time_utc + timedelta(hours=1) < now_utc:
                 try:
                     await thread.edit(archived=True, reason="파티 모집 시간 1시간 경과, 스레드 자동 보관")
                     print(f"✅ 스레드 '{thread.name}' (ID: {thread_id_str}) 자동 보관 처리됨.")
-                    # 스레드 보관 후 파티 정보는 유지 (삭제는 schedule_thread_deletion에서 처리)
                 except discord.Forbidden:
                     print(f"❌ 스레드 '{thread.name}' (ID: {thread_id_str}) 보관 권한이 없습니다. 봇 권한을 확인해주세요.")
                 except Exception as e:
                     print(f"❌ 스레드 '{thread.name}' (ID: {thread_id_str}) 보관 중 오류 발생: {e}")
         # --- 스레드 자동 보관 로직 끝 ---
 
-        # --- 기존 리마인더 알림 로직 ---
-        # reminder_dt_utc는 load_state에서 이미 datetime 객체로 변환되어 저장됨
+        # --- 리마인더 알림 로직 ---
         reminder_dt_utc = info.get("reminder_time") 
         
         if reminder_dt_utc is None: # 이미 알림을 보냈거나 설정되지 않은 경우
             continue
 
-        time_until_reminder = reminder_dt_utc - now_utc
+        print(f"DEBUG: 스레드 {thread_id_str} - Reminder: {reminder_dt_utc.isoformat()}, Now: {now_utc.isoformat()}")
         
-        # 리마인더 시간이 현재 시간과 1분 이내로 남았을 경우 (정확히 0분~1분 사이)
-        if timedelta(minutes=0) <= time_until_reminder < timedelta(minutes=1):
+        time_until_reminder = reminder_dt_utc - now_utc
+        print(f"DEBUG: 스레드 {thread_id_str} - Time until reminder: {time_until_reminder}")
+        
+        # 리마인더 시간이 현재 시간과 1분 이내로 남았을 경우 또는 이미 지났지만 봇 재시작 등으로 알림을 못 보냈을 경우
+        if timedelta(minutes=0) <= time_until_reminder < timedelta(minutes=1) or (reminder_dt_utc < now_utc and time_until_reminder > timedelta(minutes=-1)): # 과거 1분 이내의 시간도 포함
             guild = bot.get_guild(YOUR_GUILD_ID)
             if not guild:
                 print(f"경고: 길드 ID {YOUR_GUILD_ID}를 찾을 수 없습니다. (리마인더 루프)")
+                info["reminder_time"] = None # 길드를 찾을 수 없으면 알림 보낼 수 없으므로 초기화
+                save_state()
                 continue
 
             mentions = []
@@ -860,7 +871,8 @@ async def reminder_loop():
                 if member:
                     mentions.append(member.mention)
             
-            if thread: # 스레드가 존재할 경우에만 알림 발송
+            # 스레드가 존재하고 유효한 경우에만 알림 발송 시도
+            if thread and isinstance(thread, discord.Thread):
                 try:
                     await thread.send(
                         f"⏰ **리마인더 알림!**\n{' '.join(mentions)}\n"
@@ -868,16 +880,26 @@ async def reminder_loop():
                     )
                     info["reminder_time"] = None # 알림 보낸 후 reminder_time 초기화
                     save_state()
-                    print(f"리마인더 전송 완료: 스레드 {thread_id_str} - {info['dungeon']}")
+                    print(f"✅ 리마인더 전송 완료: 스레드 {thread_id_str} - {info['dungeon']}")
+                except discord.Forbidden:
+                    print(f"❌ 리마인더 전송 실패: 스레드 {thread_id_str}에 메시지 보낼 권한이 없습니다.")
+                    info["reminder_time"] = None # 권한 없으면 더 이상 시도 무의미
+                    save_state()
                 except Exception as e:
                     print(f"❌ 리마인더 전송 실패 (스레드 {thread_id_str}): {e}")
+                    # 오류 발생 시 reminder_time을 초기화하지 않아서 다음 루프에서 재시도할 수 있도록 함
+                    # 그러나 너무 많은 오류가 발생하면 루프가 느려질 수 있으므로, 재시도 로직을 더 견고하게 할 필요는 있음
             else:
-                print(f"경고: 스레드 ID {thread_id_str}를 찾을 수 없습니다. 리마인더 알림을 보낼 수 없습니다.")
+                print(f"경고: 스레드 ID {thread_id_str}를 찾을 수 없거나 이미 삭제되었습니다. 리마인더 알림을 보낼 수 없습니다.")
+                info["reminder_time"] = None # 스레드가 없으면 알림 보낼 수 없으므로 초기화
+                save_state()
         
-        # 과거 시간인데 리마인더가 아직 남아있는 경우 처리 (봇 재시작 등으로 놓쳤을 경우)
-        elif reminder_dt_utc < now_utc and reminder_dt_utc is not None:
+        # 리마인더 시간이 너무 많이 지난 경우 (예: 봇이 오래 꺼져있었을 때) 초기화
+        elif reminder_dt_utc < now_utc - timedelta(minutes=5) and reminder_dt_utc is not None: # 5분 이상 지났으면 초기화
+            print(f"DEBUG: 스레드 {thread_id_str} - 리마인더 시간이 너무 오래 지났습니다. 초기화.")
             info["reminder_time"] = None
             save_state()
+
 
 
 ## 새 멤버 환영 및 인증 안내
