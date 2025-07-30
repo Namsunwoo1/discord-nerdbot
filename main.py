@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View, Select
+import pytz # pytz 라이브러리 임포트 확인
 
 # === .env 로드 ===
 load_dotenv()
@@ -18,13 +19,14 @@ else:
     print("✅ DISCORD_TOKEN 정상 로드됨")
 
 # === 설정 ===
-YOUR_GUILD_ID = 1388092210519605361
+# TODO: 아래 ID들을 실제 디스코드 서버 및 채널, 역할 ID로 변경해주세요!
+YOUR_GUILD_ID = 1388092210519605361 
 ROLE_SELECT_CHANNEL_ID = 1388211020576587786
-VERIFY_CHANNEL_ID = 1391373955507552296    # 인증 버튼 메시지를 보낼 채널
-VERIFIED_ROLE_ID = 1390356825454416094     # 인증 완료 역할 (이 역할이 '찡긋' 역할이 됩니다)
-GUEST_ROLE_ID = 1393038834106892379      # '손님' 역할 ID (Discord에서 생성 후 여기에 붙여넣으세요!)
-VERIFY_LOG_CHANNEL_ID = 1391756822763012190      # 인증 로그 채널
-WELCOME_CHANNEL_ID = 1390643886656847983 # "반갑죠채널"의 실제 채널 ID
+VERIFY_CHANNEL_ID = 1391373955507552296
+VERIFIED_ROLE_ID = 1390356825454416094
+GUEST_ROLE_ID = 1393038834106892379
+VERIFY_LOG_CHANNEL_ID = 1391756822763012190
+WELCOME_CHANNEL_ID = 1390643886656847983
 
 # --- 인증 질문/답변 설정 ---
 VERIFY_QUESTION = "찡긋 디스코드 채널에 오신것을 환영합니다.\n안내받은 코드를 입력하세요.\n(코드가 없을 경우 승인이 불가합니다.)"
@@ -69,37 +71,6 @@ ALL_ROLE_NAMES = {k: v for category in ROLE_IDS.values() for k, v in category.it
 # MBTI 역할 이름만 따로 리스트로 정의 (통계 계산 및 단일 선택 처리 시 유용)
 MBTI_ROLE_NAMES = list(ROLE_IDS["MBTI"].keys())
 
-DATA_FILE = "data.json"
-state = {"role_message_id": None, "party_infos": {}, "initial_message_id": None}
-
-# KST 시간대 정의 (UTC+9)
-KST = timezone(timedelta(hours=9))
-
-# === 상태 로드 및 저장 ===
-def save_state():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=4)
-
-def load_state():
-    global state
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            try:
-                loaded = json.load(f)
-                state = {
-                    "role_message_id": loaded.get("role_message_id"),
-                    "party_infos": loaded.get("party_infos", {}),
-                    "initial_message_id": loaded.get("initial_message_id")
-                }
-            except Exception as e:
-                print(f"state 로드 실패: {e}")
-
-# === 인텐트 및 봇 초기화 ===
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-
-# === 역할 선택 UI 개선: 아르카나/MBTI 탭 ===
-
 # 역할 버튼 이모지 맵
 EMOJI_MAP = {
     "세이크리드 가드": "🛡️", "다크 메이지": "🔮", "세인트 바드": "🎵",
@@ -111,7 +82,80 @@ EMOJI_MAP = {
     "ESTJ": "🏛️", "ESFJ": "🤝", "ENFJ": "🌟", "ENTJ": "👑",
 }
 
+# 상태 저장을 위한 파일명
+DATA_FILE = "state.json" 
+
+# 봇의 현재 상태를 저장할 딕셔너리 (전역 변수)
+# role_message_id: 역할 선택 메시지의 ID (필요시 사용)
+# party_infos: { 스레드ID: {파티정보딕셔너리} }
+# initial_message_id: 역할 선택을 시작하는 채널의 초기 메시지 ID (지속성용)
+state = {"role_message_id": None, "party_infos": {}, "initial_message_id": None}
+
+# KST 시간대 정의 (UTC+9)
+KST = pytz.timezone('Asia/Seoul')
+
+# === 상태 로드 및 저장 함수 ===
+def save_state():
+    """현재 봇의 상태를 JSON 파일로 저장합니다."""
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        # datetime 객체를 타임스탬프로 변환하여 저장
+        serializable_state = state.copy()
+        party_infos_copy = {}
+        for thread_id, info in serializable_state.get('party_infos', {}).items():
+            info_copy = info.copy()
+            if 'reminder_time' in info_copy and isinstance(info_copy['reminder_time'], datetime):
+                info_copy['reminder_time'] = info_copy['reminder_time'].timestamp()
+            if 'party_time' in info_copy and isinstance(info_copy['party_time'], datetime):
+                info_copy['party_time'] = info_copy['party_time'].timestamp()
+            party_infos_copy[thread_id] = info_copy
+        serializable_state['party_infos'] = party_infos_copy
+        json.dump(serializable_state, f, ensure_ascii=False, indent=4)
+
+def load_state():
+    """JSON 파일에서 봇의 상태를 불러옵니다."""
+    global state
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            try:
+                loaded = json.load(f)
+                
+                # 'party_infos'의 datetime 객체 변환 처리
+                if 'party_infos' in loaded:
+                    for thread_id, info in loaded['party_infos'].items():
+                        if 'reminder_time' in info and info['reminder_time'] is not None:
+                            # 타임스탬프를 UTC datetime 객체로 변환
+                            info['reminder_time'] = datetime.fromtimestamp(info['reminder_time'], tz=timezone.utc)
+                        if 'party_time' in info and info['party_time'] is not None:
+                            # 타임스탬프를 UTC datetime 객체로 변환
+                            info['party_time'] = datetime.fromtimestamp(info['party_time'], tz=timezone.utc)
+                
+                state = {
+                    "role_message_id": loaded.get("role_message_id"),
+                    "party_infos": loaded.get("party_infos", {}),
+                    "initial_message_id": loaded.get("initial_message_id")
+                }
+                print("✅ 상태 파일 로드 완료")
+            except json.JSONDecodeError:
+                print("❌ state.json 파일이 손상되었거나 비어 있습니다. 초기화합니다.")
+                state = {"role_message_id": None, "party_infos": {}, "initial_message_id": None}
+            except Exception as e:
+                print(f"❌ state 로드 중 알 수 없는 오류 발생: {e}. 상태를 초기화합니다.")
+                state = {"role_message_id": None, "party_infos": {}, "initial_message_id": None}
+    else:
+        print("ℹ️ state.json 파일이 없습니다. 새로운 상태를 생성합니다.")
+
+# === 인텐트 및 봇 초기화 ===
+# 모든 인텐트를 사용하는 경우 discord.Intents.all()
+# 특정 인텐트만 필요한 경우 discord.Intents.default() 후 필요한 인텐트 활성화
+intents = discord.Intents.default()
+intents.message_content = True # 봇이 메시지 내용을 읽을 수 있도록 허용
+intents.members = True # 길드 멤버 정보 (닉네임, 역할 등)를 가져올 수 있도록 허용
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+# === 역할 선택 UI ===
+
 class RoleSelectButton(Button):
+    """카테고리별 역할을 선택하거나 해제하는 버튼."""
     def __init__(self, role_name, emoji, role_type):
         super().__init__(
             label=role_name,
@@ -125,13 +169,11 @@ class RoleSelectButton(Button):
     async def callback(self, interaction: discord.Interaction):
         role_id = ROLE_IDS[self.role_type].get(self.role_name)
         if not role_id:
-            await interaction.response.send_message(f"'{self.role_name}' 역할 ID를 찾을 수 없습니다.", ephemeral=True)
-            return
+            return await interaction.response.send_message(f"'{self.role_name}' 역할 ID를 찾을 수 없습니다.", ephemeral=True)
 
         role = interaction.guild.get_role(role_id)
         if not role:
-            await interaction.response.send_message(f"'{self.role_name}' 역할을 서버에서 찾을 수 없습니다.", ephemeral=True)
-            return
+            return await interaction.response.send_message(f"'{self.role_name}' 역할을 서버에서 찾을 수 없습니다.", ephemeral=True)
 
         if role in interaction.user.roles:
             await interaction.user.remove_roles(role)
@@ -149,7 +191,7 @@ class RoleSelectButton(Button):
 
 
 class CategorySelectView(View):
-    """아르카나/MBTI 카테고리를 선택하는 초기 뷰"""
+    """아르카나/MBTI 카테고리를 선택하는 초기 뷰."""
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -168,7 +210,7 @@ class CategorySelectView(View):
         )
 
 class RoleButtonsView(View):
-    """선택된 카테고리(아르카나 또는 MBTI)에 해당하는 역할 버튼들을 보여주는 뷰"""
+    """선택된 카테고리(아르카나 또는 MBTI)에 해당하는 역할 버튼들을 보여주는 뷰."""
     def __init__(self, role_category: str):
         super().__init__(timeout=None)
         self.role_category = role_category
@@ -181,7 +223,7 @@ class RoleButtonsView(View):
         self.add_item(BackToCategoryButton())
 
 class BackToCategoryButton(Button):
-    """카테고리 선택 뷰로 돌아가는 버튼"""
+    """카테고리 선택 뷰로 돌아가는 버튼."""
     def __init__(self):
         super().__init__(label="🔙 뒤로가기", style=discord.ButtonStyle.danger, row=4, custom_id="back_to_category_button")
     
@@ -252,12 +294,14 @@ class VerifyView(View):
         super().__init__(timeout=None)
         self.add_item(VerifyButton())
 
-# === 파티 모집 ===
+# === 파티 모집 기능 ===
+
 class PartyRoleSelect(Select):
+    """파티 참여자가 자신의 아르카나를 선택하고 참여하는 드롭다운 메뉴."""
     def __init__(self):
         options = [
             discord.SelectOption(label=role, emoji=EMOJI_MAP.get(role, "❓"))
-            for role in ROLE_IDS["JOB"].keys()
+            for role in ROLE_IDS["JOB"].keys() # JOB 역할만 선택 가능
         ] + [discord.SelectOption(label="참여 취소", emoji="❌")]
         super().__init__(placeholder="아르카나를 선택하거나 참여 취소하세요!", min_values=1, max_values=1, options=options, custom_id="party_role_select")
 
@@ -284,6 +328,7 @@ class PartyRoleSelect(Select):
         await update_party_embed(thread_id)
 
 class PartyEditButton(Button):
+    """파티 모집자가 파티 정보를 수정할 수 있는 버튼."""
     def __init__(self, label="✏️ 파티 정보 수정", style=discord.ButtonStyle.primary):
         super().__init__(label=label, style=style, custom_id="party_edit_button")
 
@@ -313,35 +358,40 @@ class PartyEditButton(Button):
             time_str = content_parts[2]
 
             # 파티 시간 파싱 및 UTC 변환 로직 (KST 기준)
-            current_year = datetime.now().year
+            current_year = datetime.now(KST).year # 현재 KST 시간대의 연도
             party_time_utc = None
-            for year_offset in [0, 1]:
+            for year_offset in [0, 1]: # 현재 연도와 다음 연도까지 고려
                 try:
                     parsed_dt = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
                     party_time_kst = parsed_dt.replace(tzinfo=KST)
                     party_time_utc = party_time_kst.astimezone(timezone.utc)
                     
+                    # 이미 지난 시간이라면 다음 연도로 시도
                     if party_time_utc < datetime.now(timezone.utc) and year_offset == 0:
                         continue
-                    break
+                    break # 유효한 시간을 찾았으면 루프 종료
                 except ValueError:
-                    continue
-            
+                    continue # 파싱 실패 시 다음 연도로 시도
+
             if not party_time_utc:
                 raise ValueError("날짜/시간 형식이 올바르지 않거나 유효하지 않은 날짜입니다. (예: 7/10 20:30)")
 
-            # 알림 시간 (10분 전으로 변경)
+            # 알림 시간 (파티 시작 10분 전)
             reminder_time_utc = party_time_utc - timedelta(minutes=10)
 
             info.update({
                 "dungeon": dungeon, 
                 "date": date_str, 
                 "time": time_str, 
-                "reminder_time": reminder_time_utc.timestamp()
+                "reminder_time": reminder_time_utc, # datetime 객체로 저장
+                "party_time": party_time_utc, # datetime 객체로 저장
             })
             save_state()
             await update_party_embed(thread_id)
             await interaction.followup.send("✅ 파티 정보가 성공적으로 수정되었습니다!", ephemeral=True)
+
+            # 수정된 파티 시간으로 스레드 삭제 재예약
+            bot.loop.create_task(schedule_thread_deletion(thread_id, party_time_utc))
 
         except asyncio.TimeoutError:
             await interaction.followup.send("⏰ 시간 초과로 수정이 취소되었습니다.", ephemeral=True)
@@ -351,67 +401,189 @@ class PartyEditButton(Button):
             await interaction.followup.send(f"⚠️ 오류 발생: {e}", ephemeral=True)
 
 class PartyView(View):
+    """파티 모집 임베드에 포함될 뷰 (역할 선택 및 수정 버튼)."""
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(PartyRoleSelect())
         self.add_item(PartyEditButton())
 
+async def update_party_embed(thread_id: int):
+    """주어진 스레드 ID의 파티 모집 임베드 메시지를 업데이트합니다."""
+    info = state["party_infos"].get(str(thread_id))
+    if not info:
+        print(f"DEBUG: update_party_embed - 파티 정보 없음 for thread_id {thread_id}")
+        return
+
+    thread = bot.get_channel(thread_id)
+    if not thread or not isinstance(thread, discord.Thread):
+        print(f"DEBUG: update_party_embed - 스레드 채널을 찾을 수 없거나 스레드가 아님 for {thread_id}")
+        # 스레드가 사라진 경우, state에서도 제거
+        if str(thread_id) in state["party_infos"]:
+            del state["party_infos"][str(thread_id)]
+            save_state()
+        return
+
+    try:
+        embed_msg = await thread.fetch_message(info["embed_msg_id"])
+    except discord.NotFound:
+        print(f"DEBUG: update_party_embed - 임베드 메시지 ({info['embed_msg_id']})를 찾을 수 없음. 스레드 {thread_id}")
+        return
+    except Exception as e:
+        print(f"DEBUG: update_party_embed - 임베드 메시지 가져오기 실패: {e} for thread {thread_id}")
+        return
+
+    participants_str = "아직 없음"
+    if info["participants"]:
+        participants_list = []
+        for user_id_str, role_name in info["participants"].items():
+            user = thread.guild.get_member(int(user_id_str))
+            if user:
+                participants_list.append(f"• {user.display_name} ({role_name})")
+            else:
+                participants_list.append(f"• (알 수 없음) ({role_name})")
+        participants_str = "\n".join(participants_list)
+
+    new_embed = discord.Embed(
+        title=f"🎯 파티 모집중! - {info['dungeon']}",
+        description=(
+            f"📍 던전: **{info['dungeon']}**\n"
+            f"📅 날짜: **{info['date']}**\n"
+            f"⏰ 시간: **{info['time']}**\n\n"
+            f"**🧑‍🤝‍🧑 현재 참여자: {len(info['participants'])}명**\n{participants_str}\n\n"
+            "---"
+        ),
+        color=0x00ff00
+    )
+    owner_member = thread.guild.get_member(info['owner_id'])
+    if owner_member:
+        new_embed.set_footer(text=f"모집자: {owner_member.display_name}", icon_url=owner_member.avatar.url if owner_member.avatar else discord.Embed.Empty)
+
+    try:
+        await embed_msg.edit(embed=new_embed)
+        print(f"DEBUG: 스레드 {thread_id} 임베드 업데이트 완료.")
+    except Exception as e:
+        print(f"DEBUG: 스레드 {thread_id} 임베드 업데이트 실패: {e}")
+
+async def schedule_thread_deletion(thread_id: int, delete_time_utc: datetime):
+    """지정된 시간에 스레드를 삭제하도록 예약합니다."""
+    
+    now_utc = datetime.now(timezone.utc)
+    time_to_wait = (delete_time_utc - now_utc).total_seconds()
+
+    if time_to_wait <= 0:
+        print(f"⚠️ 스레드 {thread_id} 삭제 시간이 현재 시간보다 빠르거나 같습니다. 즉시 삭제를 시도합니다.")
+        # 만약 삭제 시간이 이미 지났다면 바로 삭제 시도
+        try:
+            thread_channel = bot.get_channel(thread_id)
+            if thread_channel and isinstance(thread_channel, discord.Thread):
+                await thread_channel.delete()
+                print(f"✅ 스레드 {thread_id}가 즉시 삭제되었습니다.")
+                if str(thread_id) in state["party_infos"]:
+                    del state["party_infos"][str(thread_id)]
+                    save_state()
+            else:
+                print(f"⚠️ 스레드 {thread_id}를 찾을 수 없거나 스레드 객체가 아닙니다. (이미 삭제되었을 수 있음)")
+                # 스레드가 이미 삭제된 경우 state에서도 제거
+                if str(thread_id) in state["party_infos"]:
+                    del state["party_infos"][str(thread_id)]
+                    save_state()
+        except discord.NotFound:
+            print(f"⚠️ 스레드 {thread_id}를 찾을 수 없어 삭제할 수 없습니다. (이미 삭제되었을 수 있음)")
+            if str(thread_id) in state["party_infos"]:
+                del state["party_infos"][str(thread_id)]
+                save_state()
+        except Exception as e:
+            print(f"❌ 스레드 {thread_id} 즉시 삭제 중 오류 발생: {e}")
+        return
+
+    print(f"⏳ 스레드 {thread_id}는 {time_to_wait:.0f}초 후 (UTC: {delete_time_utc.isoformat()}) 삭제될 예정입니다.")
+    
+    await asyncio.sleep(time_to_wait)
+
+    try:
+        thread_channel = bot.get_channel(thread_id)
+        if thread_channel and isinstance(thread_channel, discord.Thread):
+            await thread_channel.delete()
+            print(f"✅ 스레드 {thread_id}가 모집 시간 종료로 인해 삭제되었습니다.")
+            if str(thread_id) in state["party_infos"]:
+                del state["party_infos"][str(thread_id)]
+                save_state()
+        else:
+            print(f"⚠️ 스레드 {thread_id}를 찾을 수 없거나 이미 삭제되었습니다.")
+            if str(thread_id) in state["party_infos"]:
+                del state["party_infos"][str(thread_id)]
+                save_state()
+    except discord.NotFound:
+        print(f"⚠️ 스레드 {thread_id}를 찾을 수 없어 삭제할 수 없습니다. (이미 삭제되었을 수 있음)")
+        if str(thread_id) in state["party_infos"]:
+            del state["party_infos"][str(thread_id)]
+            save_state()
+    except Exception as e:
+        print(f"❌ 스레드 {thread_id} 삭제 중 오류 발생: {e}")
+
+# === 명령어: 파티 모집 ===
 @bot.command()
 async def 모집(ctx):
+    # 1. !모집 명령어 메시지 자동 삭제
+    try:
+        await ctx.message.delete()
+    except discord.Forbidden:
+        print(f"❌ '{ctx.guild.name}' 길드에서 메시지 삭제 권한이 없습니다.")
+    except Exception as e:
+        print(f"⚠️ 메시지 삭제 중 오류 발생: {e}")
+
     if not ctx.guild:
         await ctx.send("이 명령어는 서버 채널에서만 사용할 수 있습니다.")
         return
 
-    # '찡긋' 역할이 없는 사용자에게는 명령어 사용을 제한
+    # '찡긋' 역할 확인
     verified_role = ctx.guild.get_role(VERIFIED_ROLE_ID)
     if not verified_role or verified_role not in ctx.author.roles:
-        await ctx.send("⛔ 파티 모집은 `찡긋` 역할을 가진 멤버만 가능합니다. 먼저 인증을 완료해주세요!", ephemeral=True)
+        await ctx.send("⛔ 파티 모집은 `찡긋` 역할을 가진 멤버만 가능합니다. 먼저 인증을 완료해주세요!")
         return
 
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
-    # 수정된 부분: ephemeral=True 추가
-    await ctx.reply("📥 파티 정보를 한 줄로 입력해주세요. 예: `브리레흐1-3관 7/6 20:00`", ephemeral=True)
+    await ctx.reply("📥 파티 정보를 한 줄로 입력해주세요. 예: `브리레흐1-3관 7/6 20:00`")
     
     try:
         msg = await bot.wait_for("message", timeout=30.0, check=check)
         content_parts = msg.content.strip().split()
         if len(content_parts) < 3:
-            await ctx.reply("⚠️ 입력 형식이 올바르지 않습니다. (예: `던전명 7/6 20:00`)", ephemeral=True)
+            await ctx.reply("⚠️ 입력 형식이 올바르지 않습니다. (예: `던전명 7/6 20:00`)")
             return
 
         dungeon = content_parts[0]
         date_str = content_parts[1]
         time_str = content_parts[2]
 
-        # 파티 시간 파싱 및 UTC 변환 로직 (KST 기준)
-        current_year = datetime.now().year
+        current_year = datetime.now(KST).year # KST 기준 현재 연도
         party_time_utc = None
-        for year_offset in [0, 1]: # 현재 연도, 다음 연도 시도
+        for year_offset in [0, 1]: # 현재 연도와 다음 연도까지 고려
             try:
                 parsed_dt = datetime.strptime(f"{current_year + year_offset}-{date_str} {time_str}", "%Y-%m/%d %H:%M")
                 party_time_kst = parsed_dt.replace(tzinfo=KST)
                 party_time_utc = party_time_kst.astimezone(timezone.utc)
                 
+                # 이미 지난 시간이라면 다음 연도로 시도
                 if party_time_utc < datetime.now(timezone.utc) and year_offset == 0:
                     continue
-                break
+                break # 유효한 시간을 찾았으면 루프 종료
             except ValueError:
-                continue
+                continue # 파싱 실패 시 다음 연도로 시도
         
         if not party_time_utc:
             raise ValueError("날짜/시간 형식이 올바르지 않거나 유효하지 않은 날짜입니다. (예: 7/6 20:00)")
 
-        # 알림 시간 (10분 전으로 변경)
-        reminder_time_utc = party_time_utc - timedelta(minutes=10)
+        reminder_time_utc = party_time_utc - timedelta(minutes=10) # 10분 전 알림
 
     except asyncio.TimeoutError:
-        await ctx.reply("⏰ 시간 초과로 파티 생성이 취소되었습니다.", ephemeral=True) # 수정된 부분
+        await ctx.reply("⏰ 시간 초과로 파티 생성이 취소되었습니다.")
         return
     except ValueError as e:
-        await ctx.reply(f"⚠️ {e}", ephemeral=True) # 수정된 부분
+        await ctx.reply(f"⚠️ {e}")
         return
     except Exception as e:
-        await ctx.reply(f"⚠️ 파티 정보 입력 중 오류 발생: {e}", ephemeral=True) # 수정된 부분
+        await ctx.reply(f"⚠️ 파티 정보 입력 중 오류 발생: {e}")
         return
 
     # 스레드 이름 변경: [던전명] 날짜 시간 - 모집자닉네임님의 파티 모집
@@ -421,12 +593,14 @@ async def 모집(ctx):
         auto_archive_duration=60, # 기본 60분 (1시간) 자동 보관 설정
     )
 
+    # 파티 정보 딕셔너리 생성 및 저장
     party_info = {
         "dungeon": dungeon,
         "date": date_str,
         "time": time_str,
-        "reminder_time": reminder_time_utc.timestamp(),
-        "participants": {},
+        "reminder_time": reminder_time_utc, # datetime 객체로 저장
+        "party_time": party_time_utc, # datetime 객체로 저장
+        "participants": {}, # {user_id: role_name}
         "embed_msg_id": None,
         "owner_id": ctx.author.id,
     }
@@ -434,12 +608,14 @@ async def 모집(ctx):
     state["party_infos"][str(thread.id)] = party_info
     save_state()
 
-    # 초기 임베드 메시지 생성 및 전송 (update_party_embed에서 최종 형태를 만드므로 여기서는 간략하게)
+    # 초기 임베드 메시지 생성 및 전송
     initial_embed = discord.Embed(
         title=f"🎯 파티 모집중! - {dungeon}",
         description=(
-            f"📍 던전: **{dungeon}**\n📅 날짜: **{date_str}**\n⏰ 시간: **{time_str}**\n\n"
-            "**🧑‍🤝‍🧑 현재 참여자: 0명**\n(아직 없음)\n\n"
+            f"📍 던전: **{dungeon}**\n"
+            f"📅 날짜: **{date_str}**\n"
+            f"⏰ 시간: **{time_str}**\n\n"
+            f"**🧑‍🤝‍🧑 현재 참여자: 0명**\n(아직 없음)\n\n"
             "---"
         ),
         color=0x00ff00
@@ -449,80 +625,18 @@ async def 모집(ctx):
         initial_embed.set_footer(text=f"모집자: {owner_member.display_name}", icon_url=owner_member.avatar.url if owner_member.avatar else discord.Embed.Empty)
 
     embed_msg = await thread.send(embed=initial_embed)
-    await embed_msg.pin()
+    await embed_msg.pin() # 메시지 고정
     party_info["embed_msg_id"] = embed_msg.id
-    save_state()
+    save_state() # 임베드 메시지 ID 저장 후 다시 상태 저장
+
     await thread.send(view=PartyView()) # 파티 참여/수정 버튼 뷰 전송
-    # 이 메시지는 모두에게 보이도록 유지
-    await ctx.send(f"{ctx.author.mention}님, 파티 모집 스레드가 생성되었습니다: {thread.mention}")
+    await ctx.send(f"{ctx.author.mention}님, 파티 모집 스레드가 생성되었습니다: {thread.mention}", delete_after=10) # 10초 후 자동 삭제
+
+    # 모집 시간 종료 후 스레드 자동 삭제 스케줄링
+    bot.loop.create_task(schedule_thread_deletion(thread.id, party_time_utc))
 
 
-async def update_party_embed(thread_id):
-    info = state["party_infos"].get(str(thread_id))
-    if not info:
-        return
-
-    guild = bot.get_guild(YOUR_GUILD_ID)
-    if not guild:
-        print(f"길드 ID {YOUR_GUILD_ID}를 찾을 수 없습니다.")
-        return
-
-    participants = info.get("participants", {})
-    
-    current_participants_count = len(participants)
-    
-    main, reserve = [], []
-    for idx, (user_id_str, role) in enumerate(participants.items()):
-        member = guild.get_member(int(user_id_str))
-        if not member:
-            # 멤버를 찾을 수 없으면 participant에서 제거 (선택 사항)
-            # del info["participants"][user_id_str]
-            continue
-        (main if idx < 8 else reserve).append((member, role))
-
-    desc_lines = [
-        f"📍 던전: **{info['dungeon']}**",
-        f"📅 날짜: **{info['date']}**",
-        f"⏰ 시간: **{info['time']}**",
-        "",
-        "---",
-        f"**🧑‍🤝‍🧑 현재 참여자: {current_participants_count}명**",
-    ]
-    if main:
-        desc_lines += [f"- {m.display_name}: {r}" for m, r in main]
-    else:
-        desc_lines.append("(아직 없음)")
-
-    if reserve:
-        desc_lines.append("\n**📄 예비 인원:**")
-        desc_lines += [f"- {m.display_name}: {r}" for m, r in reserve]
-
-    desc_lines.append("\n---")
-    desc_lines.append("🔔 참여자에게 시작 10분 전에 알림이 전송됩니다!")
-    desc_lines.append("👇 아래 셀렉트 메뉴에서 역할을 선택해 파티에 참여하세요! 최대 8명 + 예비 인원 허용.")
-
-    embed = discord.Embed(
-        title=f"🎯 파티 모집중! - {info['dungeon']}",
-        description="\n".join(desc_lines),
-        color=0x00ff00
-    )
-    
-    owner_member = guild.get_member(info['owner_id'])
-    if owner_member:
-        embed.set_footer(text=f"모집자: {owner_member.display_name}", icon_url=owner_member.avatar.url if owner_member.avatar else discord.Embed.Empty)
-
-    channel = bot.get_channel(int(thread_id))
-    if channel and info.get("embed_msg_id"):
-        try:
-            msg = await channel.fetch_message(info["embed_msg_id"])
-            await msg.edit(embed=embed)
-        except discord.NotFound:
-            print(f"⚠️ 임베드 메시지 ({info['embed_msg_id']})를 찾을 수 없습니다. (스레드 {thread_id})")
-        except Exception as e:
-            print(f"❌ 임베드 수정 실패 (스레드 {thread_id}): {e}")
-
-# ---
-## MBTI 통계 기능
+## MBTI 통계 및 확인 기능
 
 @bot.command()
 async def mbti통계(ctx):
@@ -533,16 +647,17 @@ async def mbti통계(ctx):
         return
 
     mbti_roles_dict = {name: guild.get_role(ROLE_IDS["MBTI"][name]) for name in MBTI_ROLE_NAMES if name in ROLE_IDS["MBTI"]}
-    mbti_roles_dict = {name: role for name, role in mbti_roles_dict.items() if role}
+    mbti_roles_dict = {name: role for name, role in mbti_roles_dict.items() if role} # 실제 서버에 존재하는 역할만 포함
 
     if not mbti_roles_dict:
         await ctx.send("서버에 설정된 MBTI 역할이 없습니다. `ROLE_IDS['MBTI']` 또는 `MBTI_ROLE_NAMES`를 확인해주세요.")
         return
 
-    mbti_counts = {name: 0 for name in MBTI_ROLE_NAMES}
+    mbti_counts = {name: 0 for name in MBTI_ROLE_NAMES} # 모든 MBTI 역할을 0으로 초기화
     
+    # 서버의 모든 멤버를 가져와서 MBTI 역할 카운트
     members = []
-    async for member in guild.fetch_members(limit=None):
+    async for member in guild.fetch_members(limit=None): # 모든 멤버를 가져오기 (시간이 걸릴 수 있음)
         members.append(member)
 
     for member in members:
@@ -550,6 +665,7 @@ async def mbti통계(ctx):
             if role.name in mbti_counts:
                 mbti_counts[role.name] += 1
     
+    # 카운트가 높은 순서대로 정렬
     sorted_mbti_counts = sorted(mbti_counts.items(), key=lambda item: item[1], reverse=True)
 
     embed = discord.Embed(
@@ -560,7 +676,7 @@ async def mbti통계(ctx):
 
     total_mbti_users = 0
     for mbti, count in sorted_mbti_counts:
-        if count > 0:
+        if count > 0: # 0명인 MBTI는 표시하지 않음
             embed.add_field(name=mbti, value=f"{count}명", inline=True)
             total_mbti_users += count
     
@@ -574,7 +690,7 @@ async def mbti통계(ctx):
 @bot.command()
 async def mbti확인(ctx, mbti_type: str):
     """특정 MBTI 역할을 가진 멤버 목록을 보여줍니다. (예: !mbti확인 ENFP)"""
-    mbti_type = mbti_type.upper()
+    mbti_type = mbti_type.upper() # 대소문자 구분 없이 처리
 
     if mbti_type not in MBTI_ROLE_NAMES:
         await ctx.send(f"⚠️ '{mbti_type}'는 유효한 MBTI 역할이 아닙니다. 정확한 MBTI 유형을 입력해주세요. (예: ISTJ, ENFP)")
@@ -591,7 +707,7 @@ async def mbti확인(ctx, mbti_type: str):
         return
 
     members_with_role = []
-    async for member in ctx.guild.fetch_members(limit=None):
+    async for member in ctx.guild.fetch_members(limit=None): # 모든 멤버를 가져오기
         if mbti_role in member.roles:
             members_with_role.append(member.display_name)
     
@@ -602,7 +718,7 @@ async def mbti확인(ctx, mbti_type: str):
 
     if members_with_role:
         description_text = "\n".join(members_with_role)
-        if len(description_text) > 1900:
+        if len(description_text) > 1900: # Discord 임베드 설명 최대 길이 (2048자) 고려
             description_text = description_text[:1900] + "\n...(이하 생략)"
         embed.description = description_text
         embed.set_footer(text=f"총 {len(members_with_role)}명")
@@ -611,8 +727,10 @@ async def mbti확인(ctx, mbti_type: str):
 
     await ctx.send(embed=embed)
 
-# ---
-## 명령어 도움말 기능
+
+## 봇 도움말 기능
+
+
 @bot.command(name="도움말", aliases=["help", "명령어"])
 async def show_help(ctx):
     """봇의 사용 가능한 명령어 목록을 보여줍니다."""
@@ -648,36 +766,30 @@ async def show_help(ctx):
     await ctx.send(embed=embed)
 
 
-# === 리마인더 루프 ===
+## 배경 작업 (리마인더, 스레드 자동 보관)
+
+
 @tasks.loop(minutes=1)
 async def reminder_loop():
-    await bot.wait_until_ready()
+    """매 1분마다 파티 리마인더 알림을 확인하고 스레드를 자동 보관합니다."""
+    await bot.wait_until_ready() # 봇이 완전히 준비될 때까지 기다림
     now_utc = datetime.now(timezone.utc)
 
     # dictionary를 복사하여 반복 중 수정 오류 방지
     for thread_id_str, info in list(state["party_infos"].items()):
         thread = bot.get_channel(int(thread_id_str))
 
-        # --- 스레드 자동 보관 로직 추가 ---
-        if thread and isinstance(thread, discord.Thread):
-            # party_time을 UTC aware datetime 객체로 파싱
-            party_time_str = f"{datetime.now().year}-{info['date']} {info['time']}"
-            try:
-                # KST 기준으로 파싱 후 UTC로 변환
-                parsed_dt = datetime.strptime(party_time_str, "%Y-%m/%d %H:%M").replace(tzinfo=KST)
-                party_time_utc = parsed_dt.astimezone(timezone.utc)
-            except ValueError:
-                print(f"경고: 스레드 {thread_id_str}의 날짜/시간 형식 오류. 스레드 보관 로직 건너뛰기.")
-                party_time_utc = None # 오류 발생 시 None으로 설정하여 아래 로직에 영향 주지 않음
+        # --- 스레드 자동 보관 로직 ---
+        # party_time이 datetime 객체인지 확인 (load_state에서 변환했음)
+        party_time_utc = info.get("party_time") 
 
+        if thread and isinstance(thread, discord.Thread) and party_time_utc:
             # 파티 시작 시간이 1시간 지났고, 아직 스레드가 활성화 상태라면 보관
-            if party_time_utc and not thread.archived and party_time_utc + timedelta(hours=1) < now_utc:
+            if not thread.archived and party_time_utc + timedelta(hours=1) < now_utc:
                 try:
                     await thread.edit(archived=True, reason="파티 모집 시간 1시간 경과, 스레드 자동 보관")
                     print(f"✅ 스레드 '{thread.name}' (ID: {thread_id_str}) 자동 보관 처리됨.")
-                    # 스레드 보관 후 파티 정보는 유지 (선택 사항: 필요 없으면 아래 주석 해제)
-                    # del state["party_infos"][thread_id_str]
-                    # save_state() # 상태 변경 시 저장
+                    # 스레드 보관 후 파티 정보는 유지 (삭제는 schedule_thread_deletion에서 처리)
                 except discord.Forbidden:
                     print(f"❌ 스레드 '{thread.name}' (ID: {thread_id_str}) 보관 권한이 없습니다. 봇 권한을 확인해주세요.")
                 except Exception as e:
@@ -685,14 +797,15 @@ async def reminder_loop():
         # --- 스레드 자동 보관 로직 끝 ---
 
         # --- 기존 리마인더 알림 로직 ---
-        reminder_timestamp = info.get("reminder_time")
+        # 이 부분이 수정되었습니다. reminder_dt_utc는 이미 datetime 객체입니다.
+        reminder_dt_utc = info.get("reminder_time") 
         
-        if reminder_timestamp is None:
+        if reminder_dt_utc is None: # 이미 알림을 보냈거나 설정되지 않은 경우
             continue
 
-        reminder_dt_utc = datetime.fromtimestamp(reminder_timestamp, tz=timezone.utc)
         time_until_reminder = reminder_dt_utc - now_utc
         
+        # 리마인더 시간이 현재 시간과 1분 이내로 남았을 경우 (정확히 0분~1분 사이)
         if timedelta(minutes=0) <= time_until_reminder < timedelta(minutes=1):
             guild = bot.get_guild(YOUR_GUILD_ID)
             if not guild:
@@ -711,7 +824,7 @@ async def reminder_loop():
                         f"⏰ **리마인더 알림!**\n{' '.join(mentions)}\n"
                         f"`{info['dungeon']}` 던전이 10분 후에 시작됩니다! **({info['date']} {info['time']})**"
                     )
-                    info["reminder_time"] = None
+                    info["reminder_time"] = None # 알림 보낸 후 reminder_time 초기화
                     save_state()
                     print(f"리마인더 전송 완료: 스레드 {thread_id_str} - {info['dungeon']}")
                 except Exception as e:
@@ -720,14 +833,17 @@ async def reminder_loop():
                 print(f"경고: 스레드 ID {thread_id_str}를 찾을 수 없습니다. 리마인더 알림을 보낼 수 없습니다.")
         
         # 과거 시간인데 리마인더가 아직 남아있는 경우 처리 (봇 재시작 등으로 놓쳤을 경우)
-        elif reminder_dt_utc < now_utc and reminder_timestamp is not None:
+        elif reminder_dt_utc < now_utc and reminder_dt_utc is not None:
             info["reminder_time"] = None
             save_state()
-# ---
 
-# === 새 멤버가 서버에 들어올 때 작동하는 함수 추가 ===
+
+## 새 멤버 환영 및 인증 안내
+
+
 @bot.event
 async def on_member_join(member):
+    """새 멤버가 서버에 들어올 때 '손님' 역할을 부여하고 환영 메시지를 보냅니다."""
     guild = member.guild
     if guild.id == YOUR_GUILD_ID: # 봇이 설정된 길드인지 확인
         guest_role = guild.get_role(GUEST_ROLE_ID)
@@ -755,31 +871,35 @@ async def on_member_join(member):
         print(f"⚠️ 봇이 설정된 길드 ({YOUR_GUILD_ID})가 아닌 다른 길드에 멤버가 조인했습니다.")
 
 
-# === 봇 실행 시 초기화 ===
+## 봇 실행 시 초기화 로직
+
+
 @bot.event
 async def on_ready():
+    """봇이 로그인되어 준비되면 실행되는 초기화 작업들."""
     print(f"✅ 봇 로그인 완료: {bot.user}")
     guild = bot.get_guild(YOUR_GUILD_ID)
 
     if guild:
         try:
-            await guild.me.edit(nick="찡긋봇")
+            await guild.me.edit(nick="찡긋봇") # 봇 닉네임 변경 시도
         except Exception as e:
             print(f"닉네임 변경 실패: {e}")
 
+        # 봇 재시작 시 Persistent View 등록 (커스텀 ID를 가진 View)
         bot.add_view(CategorySelectView())
         bot.add_view(VerifyView())
-        bot.add_view(PartyView()) # PartyView도 재등록
+        bot.add_view(PartyView()) 
 
-        # 역할 선택 메시지 확인 및 재전송
+        # 역할 선택 메시지 확인 및 재전송 (CategorySelectView)
         role_channel = guild.get_channel(ROLE_SELECT_CHANNEL_ID)
         if role_channel:
-            if state["initial_message_id"]:
+            if state["initial_message_id"]: # 저장된 메시지 ID가 있다면 재사용 시도
                 try:
                     initial_msg = await role_channel.fetch_message(state["initial_message_id"])
                     await initial_msg.edit(view=CategorySelectView())
                     print(f"✅ 기존 역할 선택 초기 메시지 ({state['initial_message_id']})에 뷰 재등록 완료.")
-                except discord.NotFound:
+                except discord.NotFound: # 메시지가 삭제되었다면 새로 전송
                     print(f"⚠️ 저장된 역할 선택 초기 메시지 ({state['initial_message_id']})를 찾을 수 없습니다. 새로 전송합니다.")
                     state["initial_message_id"] = None
                     save_state()
@@ -788,7 +908,7 @@ async def on_ready():
                     state["initial_message_id"] = None
                     save_state()
 
-            if not state["initial_message_id"]:
+            if not state["initial_message_id"]: # 메시지가 없거나 새로고침이 필요하면 전송
                 try:
                     msg = await role_channel.send(
                         "👇 아래 버튼을 눌러 `아르카나` 또는 `MBTI` 역할을 선택하세요!",
@@ -800,12 +920,12 @@ async def on_ready():
                 except Exception as e:
                     print(f"역할 선택 초기 메시지 전송 오류: {e}")
 
-        # 인증 메시지 확인 및 재전송
+        # 인증 메시지 확인 및 재전송 (VerifyView)
         verify_channel = guild.get_channel(VERIFY_CHANNEL_ID)
         if verify_channel:
             try:
                 found_existing_verify_msg = False
-                async for msg_history in verify_channel.history(limit=5):
+                async for msg_history in verify_channel.history(limit=5): # 최근 5개 메시지 확인
                     if msg_history.author == bot.user and "✅ 서버에 오신 걸 환영합니다!" in msg_history.content:
                         found_existing_verify_msg = True
                         print("✅ 기존 인증 메시지 발견. 뷰 재등록 시도.")
@@ -816,7 +936,7 @@ async def on_ready():
                             print(f"기존 인증 메시지 수정 중 오류 발생: {e_edit}")
                         break
                 
-                if not found_existing_verify_msg:
+                if not found_existing_verify_msg: # 기존 메시지가 없으면 새로 전송
                     await verify_channel.send(
                         "✅ 서버에 오신 걸 환영합니다!\n아래 버튼을 눌러 인증을 완료해주세요.",
                         view=VerifyView()
@@ -825,18 +945,30 @@ async def on_ready():
             except Exception as e:
                 print(f"인증 메시지 전송 오류: {e}")
 
-        # 파티 모집 스레드의 뷰는 스레드 생성 시에 전송되므로, 봇 재시작 시 별도 재등록 로직은 불필요.
-        # 하지만, PartyView 자체는 add_view로 등록되어야 합니다. (이미 on_ready 초반에 추가됨)
+        # 봇 재시작 시 기존 파티 모집 스레드의 임베드 업데이트 및 삭제 스케줄링 재개
+        # `state["party_infos"]`는 load_state()에서 이미 로드됨
         for thread_id_str, info in list(state["party_infos"].items()):
+            thread_id = int(thread_id_str)
             # 각 스레드의 embed_msg_id가 있는 경우 update_party_embed를 한번 호출하여 최신화
             if info.get("embed_msg_id"):
-                await update_party_embed(int(thread_id_str))
-                print(f"✅ 스레드 {thread_id_str} 임베드 정보 최신화 완료.")
+                await update_party_embed(thread_id)
+                print(f"✅ 스레드 {thread_id} 임베드 정보 최신화 완료.")
+
+            # 파티 시간이 유효하면 삭제 스케줄링 재개
+            party_time = info.get("party_time")
+            if party_time and isinstance(party_time, datetime) and party_time > datetime.now(timezone.utc):
+                bot.loop.create_task(schedule_thread_deletion(thread_id, party_time))
+                print(f"✅ 스레드 {thread_id} 삭제 스케줄링 재개 완료.")
+            else:
+                print(f"⚠️ 스레드 {thread_id}의 파티 시간 정보가 유효하지 않거나 이미 지났습니다. 스케줄링 건너뜀.")
+                # 이미 지난 파티는 state에서 제거하거나 (삭제 스케줄링이 처리했어야 함)
+                # 만약 스레드가 남아있다면 즉시 삭제 시도
+                bot.loop.create_task(schedule_thread_deletion(thread_id, datetime.now(timezone.utc)))
 
 
     # 리마인더 루프 시작
     reminder_loop.start()
 
-# === 시작 ===
-load_state()
-bot.run(TOKEN)
+# === 봇 실행 ===
+load_state() # 봇 실행 전 상태 로드
+bot.run(TOKEN) # 봇 실행
